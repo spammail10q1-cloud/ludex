@@ -1,0 +1,834 @@
+/**
+ * Updates Module
+ * Handles application update checking and downloading
+ */
+
+const fs = require("fs-extra");
+const path = require("path");
+const os = require("os");
+const axios = require("axios");
+const { pipeline } = require("stream/promises");
+const installUpdate = require("./install-update");
+const { getAutomaticUpdateCapability } = require("./update-capability");
+const { downloadDifferentialUpdate } = require("./differential-update");
+const {
+  resolveMacUpdate,
+  downloadMacDelta,
+  cacheMacBuild,
+  pruneMacCache,
+  sha256File,
+} = require("./mac-updates");
+const { ipcMain, BrowserWindow, app, powerSaveBlocker, shell } = require("electron");
+const {
+  API_URL,
+  appVersion,
+  appBranch,
+  testingVersion,
+  isDev,
+  isWindows,
+  isPortable,
+  isLinux,
+  TIMESTAMP_FILE,
+  TESTING_BRANCH_FILE,
+  testingReleaseTag,
+  LANG_DIR,
+  appDirectory,
+} = require("../core/config");
+const { updateTimestampFile } = require("../core/utils");
+const { getSettingsManager } = require("../core/settings");
+const { runTranslation, isTranslationRunning } = require("../app/translations");
+
+let isLatest = true;
+// The live version a testing branch user can switch to, once live is newer
+// than anything the branch offers
+let liveUpdateOffer = null;
+let updateDownloaded = false;
+let notificationShown = false;
+let updateDownloadInProgress = false;
+let downloadUpdatePromise = null;
+let isBrokenVersion = false;
+let languageCheckInProgress = false;
+let translationUpdateInProgress = false;
+let availableVersion = null;
+
+// Portable copies update by downloading the new portable build from the release.
+const PORTABLE_RELEASES_URL = "https://github.com/Ascendara/ascendara/releases/latest";
+
+// Live installers come straight from the GitHub release for that version; with
+// no version given, the latest live version is looked up first
+async function liveInstallerUrl(version) {
+  if (!version)
+    version = (await axios.get(`${API_URL}/`, { timeout: 15000 })).data?.appVer;
+  if (!/^\d+(?:\.\d+)*(?:-\d+)?$/.test(String(version || ""))) {
+    throw new Error("Could not determine the latest Ludex version.");
+  }
+  const file = isWindows
+    ? `Ludex.Setup.${version}.exe`
+    : `Ludex-${version}.AppImage`;
+  return `https://github.com/Ascendara/ascendara/releases/download/${version}/${file}`;
+}
+
+// Each testing branch installs from its own prerelease (see testingReleaseTag)
+const testingReleaseUrl = branch =>
+  `https://api.github.com/repos/Ascendara/ascendara/releases/tags/${testingReleaseTag(branch)}`;
+
+// A stalled connection is retried from where it stopped; the timeout is for
+// inactivity, not for the whole download
+const UPDATE_STALL_TIMEOUT = 30000;
+const UPDATE_DOWNLOAD_ATTEMPTS = 5;
+
+const runtimePlatform = process.platform;
+const isMac = runtimePlatform === "darwin";
+
+function automaticUpdateCapability() {
+  return getAutomaticUpdateCapability({
+    platform: runtimePlatform,
+    isPortable,
+    isDev,
+    isAppImage: Boolean(process.env.APPIMAGE),
+    execPath: process.execPath,
+  });
+}
+
+// The helper programs package.json ships in resources on Windows
+const BUNDLED_WINDOWS_BINARIES = [
+  "AscendaraDownloader.exe",
+  "AscendaraGameHandler.exe",
+  "AscendaraCrashReporter.exe",
+  "AscendaraNotificationHelper.exe",
+  "AscendaraAchievementWatcher.exe",
+];
+
+/**
+ * Wrap a progress callback so it only fires when the percentage changes,
+ * instead of once per received chunk
+ */
+function progressSender(window, channel) {
+  let last = -1;
+  return progress => {
+    if (progress === last) return;
+    last = progress;
+    window?.webContents.send(channel, progress);
+  };
+}
+
+/**
+ * Find this platform's installer in the branch's testing prerelease. With
+ * minVersion, refuse a build older than it, so a version announced before the
+ * build was published doesn't install an older build and prompt again.
+ */
+async function testingInstallerUrl(branch, minVersion) {
+  const { data: release } = await axios.get(testingReleaseUrl(branch), {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": `Ludex/${appVersion}`,
+    },
+    timeout: 15000,
+  });
+  // CI names the release "Testing build <version>"
+  const releaseVersion = String(release.name || "")
+    .split(" ")
+    .pop();
+  if (minVersion && isVersionLower(releaseVersion, minVersion)) {
+    throw new Error(`Testing build ${minVersion} has not been published yet.`);
+  }
+  const pattern = isWindows ? /Setup.*\.exe$/i : /\.AppImage$/i;
+  const asset = (release.assets || []).find(item => pattern.test(item.name));
+  if (!asset) throw new Error("The testing build has no installer for this platform.");
+  return asset.browser_download_url;
+}
+
+/**
+ * Record which branch the installed "testing" build should run as. Live builds
+ * ignore the file.
+ */
+async function rememberTestingBranch(branch) {
+  await fs.outputJson(TESTING_BRANCH_FILE, { branch });
+}
+
+/**
+ * Check if current version is broken
+ */
+async function checkBrokenVersion() {
+  try {
+    const response = await axios.get(`${API_URL}/app/brokenversions`, {
+      timeout: 10000,
+    });
+    const brokenVersions = response.data;
+    isBrokenVersion = brokenVersions.includes(appVersion);
+    console.log(
+      `Current version ${appVersion} is ${isBrokenVersion ? "broken" : "not broken"}`
+    );
+  } catch (error) {
+    console.error("Error checking for broken versions:", error);
+  }
+}
+
+/**
+ * Compare version strings, handling branch-specific formats
+ * Returns true if v1 < v2, false otherwise
+ */
+function isVersionLower(v1, v2) {
+  // Handle exact match
+  if (v1 === v2) return false;
+
+  // Split versions by dots and dashes to handle formats like "10.0.2-1"
+  const parseVersion = v => {
+    const parts = v.split(/[.-]/).map(p => parseInt(p) || 0);
+    return parts;
+  };
+
+  const parts1 = parseVersion(v1);
+  const parts2 = parseVersion(v2);
+
+  // Compare each part
+  const maxLength = Math.max(parts1.length, parts2.length);
+  for (let i = 0; i < maxLength; i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    if (p1 < p2) return true;
+    if (p1 > p2) return false;
+  }
+
+  return false;
+}
+
+/**
+ * Check version and update if needed
+ */
+async function checkVersionAndUpdate() {
+  try {
+    const settingsManager = getSettingsManager();
+    const settings = settingsManager.getSettings();
+    const settingsReadable = !settingsManager.hasSettingsLoadError();
+    const currentBranch = appBranch;
+
+    let latestVersion;
+    // On a testing branch: the live version and the branch's own latest build
+    let liveVersion = null;
+    let branchVersion = null;
+
+    if (currentBranch === "live") {
+      const response = await axios.get(`${API_URL}/`);
+      latestVersion = response.data.appVer;
+    } else {
+      // For public-testing and experimental, check branch-specific versions
+      // If the branch no longer exists or version matches live, treat as up-to-date
+      try {
+        const response = await axios.get(`${API_URL}/branch-versions`);
+        const branchData = response.data;
+        liveVersion = branchData.live || null;
+        branchVersion = branchData[currentBranch] || null;
+        latestVersion = branchData[currentBranch] || branchData.live || appVersion;
+      } catch {
+        // Fallback to live API if branch-versions endpoint fails
+        const response = await axios.get(`${API_URL}/`);
+        latestVersion = response.data.appVer;
+        liveVersion = latestVersion;
+      }
+    }
+
+    // Use testingVersion for testing branches, appVersion for live
+    const currentVersion =
+      currentBranch === "public-testing" || currentBranch === "experimental"
+        ? testingVersion
+        : appVersion;
+
+    // Live has passed every build this branch offers: the user chooses between
+    // switching to live and staying, and the branch only updates to its own builds
+    liveUpdateOffer =
+      currentBranch !== "live" &&
+      liveVersion &&
+      isVersionLower(currentVersion, liveVersion) &&
+      !isVersionLower(liveVersion, latestVersion)
+        ? liveVersion
+        : null;
+    if (liveUpdateOffer) latestVersion = branchVersion || currentVersion;
+
+    // Use version comparison function instead of simple equality
+    isLatest = !isVersionLower(currentVersion, latestVersion);
+    availableVersion = isLatest ? null : latestVersion;
+    console.log(
+      `Version check [${currentBranch}]: Current=${currentVersion}, Latest=${latestVersion}, Is Latest=${isLatest}`
+    );
+    if (!isLatest) {
+      const canAutoUpdate = automaticUpdateCapability().supported;
+      const automaticUpdatesEnabled = settingsReadable && settings.autoUpdate === true;
+      if (
+        automaticUpdatesEnabled &&
+        canAutoUpdate &&
+        !updateDownloadInProgress &&
+        !updateDownloaded
+      ) {
+        // Start background download
+        downloadUpdatePromise = downloadUpdateInBackground();
+      } else if ((!automaticUpdatesEnabled || !canAutoUpdate) && !notificationShown) {
+        // Show update available notification
+        notificationShown = true;
+        BrowserWindow.getAllWindows().forEach(window => {
+          window.webContents.send("update-available");
+        });
+      }
+    }
+    return isLatest;
+  } catch (error) {
+    console.error("Error checking version:", error);
+    return true;
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Download an update into destination and resolve only when every byte the
+ * server announced has arrived. The file is written as destination.part and
+ * renamed at the end, so an interrupted download is never taken for a finished
+ * one. A connection that stalls or drops is resumed with a Range request where
+ * the server supports it.
+ */
+async function downloadUpdateFile(url, destination, headers, onProgress) {
+  const partial = `${destination}.part`;
+  await fs.remove(partial);
+  let total = 0;
+  for (let attempt = 1; ; attempt++) {
+    const resumeFrom = fs.existsSync(partial) ? fs.statSync(partial).size : 0;
+    try {
+      const response = await axios({
+        url,
+        method: "GET",
+        responseType: "stream",
+        headers: {
+          ...headers,
+          "Cache-Control": "no-cache",
+          ...(resumeFrom > 0 ? { Range: `bytes=${resumeFrom}-` } : {}),
+        },
+        maxRedirects: 5,
+        timeout: UPDATE_STALL_TIMEOUT,
+      });
+      // A server that ignores the range sends the whole file again
+      const resumed = resumeFrom > 0 && response.status === 206;
+      const length = parseInt(response.headers["content-length"], 10) || 0;
+      if (!total && length) total = (resumed ? resumeFrom : 0) + length;
+      let received = resumed ? resumeFrom : 0;
+      response.data.on("data", chunk => {
+        received += chunk.length;
+        if (total > 0) onProgress?.(Math.round((received * 100) / total));
+      });
+      await pipeline(
+        response.data,
+        fs.createWriteStream(partial, { flags: resumed ? "a" : "w" })
+      );
+      const size = fs.statSync(partial).size;
+      if (total && size !== total) {
+        throw new Error(`The download stopped at ${size} of ${total} bytes`);
+      }
+      await fs.move(partial, destination, { overwrite: true });
+      return;
+    } catch (error) {
+      console.warn(`Update download attempt ${attempt} failed:`, error.message);
+      if (attempt >= UPDATE_DOWNLOAD_ATTEMPTS) {
+        await fs.remove(partial);
+        throw error;
+      }
+      await sleep(2000 * attempt);
+    }
+  }
+}
+
+/**
+ * True when a zip file ends with its central directory, which a cut-off
+ * download never has.
+ */
+async function isCompleteZip(file) {
+  const { size } = await fs.stat(file);
+  const length = Math.min(size, 65557);
+  const handle = await fs.open(file, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    await fs.read(handle, buffer, 0, length, size - length);
+    return buffer.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06])) !== -1;
+  } finally {
+    await fs.close(handle);
+  }
+}
+
+/**
+ * Download the macOS zip for branch to zipPath, rebuilding it from the cached
+ * installed build when possible, and keep it as the base for the next update
+ */
+async function downloadMacBuild(branch, version, zipPath, headers, onProgress) {
+  const target = await resolveMacUpdate(branch, version);
+  await fs.remove(zipPath);
+  let rebuilt = false;
+  try {
+    await downloadMacDelta(target, zipPath, onProgress);
+    rebuilt = true;
+  } catch (error) {
+    console.warn(
+      "Differential macOS update unavailable, downloading full zip:",
+      error.message
+    );
+  }
+  if (!rebuilt) {
+    await downloadUpdateFile(target.url, zipPath, headers, onProgress);
+    if (target.digest && (await sha256File(zipPath)) !== target.digest) {
+      await fs.remove(zipPath);
+      throw new Error("The downloaded macOS update failed sha256 verification.");
+    }
+  }
+  if (!(await isCompleteZip(zipPath))) {
+    await fs.remove(zipPath);
+    throw new Error("The downloaded macOS update is incomplete.");
+  }
+  await cacheMacBuild(target, zipPath);
+}
+
+/**
+ * Check reference language version
+ */
+async function checkReferenceLanguage() {
+  if (languageCheckInProgress || translationUpdateInProgress || isTranslationRunning())
+    return;
+  languageCheckInProgress = true;
+  try {
+    if (!fs.existsSync(LANG_DIR)) return;
+    const files = fs
+      .readdirSync(LANG_DIR)
+      .filter(file => /^[a-z]{2,8}(?:-[a-z0-9]{2,8})*\.json$/i.test(file));
+    if (!files.length) return;
+    let timestamp = {};
+    if (fs.existsSync(TIMESTAMP_FILE)) timestamp = await fs.readJson(TIMESTAMP_FILE);
+    const response = await axios.get(`${API_URL}/language/version`, {
+      timeout: 30000,
+    });
+    const version = response.data?.version;
+    if (version === undefined || version === null)
+      throw new Error("Missing reference language version");
+    // Missing version markers must also trigger an update (new or legacy installs).
+    // Older helpers stamped this version after updating only one file (and
+    // sometimes wrote outside LANG_DIR). Verify those installs once again.
+    if (version === timestamp.extraLangVer && timestamp.extraLangUpdateFormat === 2)
+      return;
+    translationUpdateInProgress = true;
+    const reference = await axios.get(`${API_URL}/language/en`, {
+      timeout: 30000,
+    });
+    if (
+      !reference.data ||
+      typeof reference.data !== "object" ||
+      Array.isArray(reference.data) ||
+      !Object.keys(reference.data).length
+    ) {
+      throw new Error("Invalid English reference language");
+    }
+    // Every language uses the same source snapshot. No command-line key limit and
+    // no independent updater process racing an interactive translation.
+    let allSucceeded = true;
+    for (const file of files) {
+      try {
+        await runTranslation(file.slice(0, -5), {
+          updateKeys: true,
+          source: reference.data,
+        });
+      } catch (error) {
+        allSucceeded = false;
+        console.error(`Failed to update language ${file}:`, error);
+        // Leave the old version in place so the next check retries missing work.
+        if (isTranslationRunning() || /cancelled/i.test(error.message)) break;
+      }
+    }
+    if (allSucceeded)
+      updateTimestampFile({ extraLangVer: version, extraLangUpdateFormat: 2 });
+  } catch (error) {
+    console.error("Error checking reference language:", error);
+  } finally {
+    languageCheckInProgress = false;
+    translationUpdateInProgress = false;
+  }
+}
+
+/**
+ * Download update in background
+ */
+async function downloadUpdateInBackground() {
+  if (updateDownloadInProgress) return;
+  updateDownloadInProgress = true;
+  let blockerId = null;
+
+  try {
+    // Set downloadingUpdate to true in timestamp
+    updateTimestampFile({
+      downloadingUpdate: true,
+    });
+
+    // Get current branch to download correct update
+    const currentBranch = appBranch;
+
+    // Use testingVersion for testing branches, appVersion for live
+    const currentVersion =
+      currentBranch === "public-testing" || currentBranch === "experimental"
+        ? testingVersion
+        : appVersion;
+
+    // Custom headers for app identification
+    const headers = {
+      "X-Ascendara-Client": "app",
+      "X-Ascendara-Version": currentVersion,
+      "X-Ascendara-Platform": isWindows
+        ? "windows"
+        : process.platform === "darwin"
+          ? "macos"
+          : "linux",
+    };
+
+    // Determine update URL based on branch
+    // macOS zips are resolved by downloadMacBuild below
+    let updateUrl;
+    if (!isMac) {
+      updateUrl =
+        currentBranch === "live"
+          ? await liveInstallerUrl(availableVersion)
+          : await testingInstallerUrl(currentBranch, availableVersion);
+    }
+    const tempDir = path.join(os.tmpdir(), "ascendarainstaller");
+    const installerFileName =
+      process.platform === "darwin"
+        ? "AscendaraInstaller.zip"
+        : isWindows
+          ? "AscendaraInstaller.exe"
+          : "AscendaraInstaller.AppImage";
+    const installerPath = path.join(tempDir, installerFileName);
+
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir);
+    }
+    const mainWindow = BrowserWindow.getAllWindows()[0];
+
+    // Keep macOS from suspending the app while it downloads in the background
+    blockerId = powerSaveBlocker.start("prevent-app-suspension");
+    await fs.remove(installerPath);
+    const onProgress = progressSender(mainWindow, "update-download-progress");
+
+    // Live Windows releases ship blockmaps, so only the changed blocks need
+    // downloading; any failure falls back to the full installer below.
+    let rebuilt = false;
+    if (
+      isWindows &&
+      currentBranch === "live" &&
+      /^\d+(?:\.\d+)*(?:-\d+)?$/.test(availableVersion || "")
+    ) {
+      try {
+        await downloadDifferentialUpdate(
+          appVersion,
+          availableVersion,
+          installerPath,
+          onProgress
+        );
+        rebuilt = true;
+      } catch (error) {
+        console.warn(
+          "Differential update unavailable, downloading full installer:",
+          error.message
+        );
+      }
+    }
+
+    if (isMac) {
+      await downloadMacBuild(
+        currentBranch,
+        availableVersion,
+        installerPath,
+        headers,
+        onProgress
+      );
+    } else if (!rebuilt) {
+      await downloadUpdateFile(updateUrl, installerPath, headers, onProgress);
+    }
+
+    updateDownloaded = true;
+    updateDownloadInProgress = false;
+
+    // Set downloadingUpdate to false in timestamp
+    updateTimestampFile({
+      downloadingUpdate: false,
+    });
+
+    // Notify that update is ready
+    BrowserWindow.getAllWindows().forEach(window => {
+      window.webContents.send("update-ready");
+    });
+  } catch (error) {
+    console.error("Error downloading update:", error);
+    updateDownloadInProgress = false;
+
+    // Notify about the error
+    BrowserWindow.getAllWindows().forEach(window => {
+      window.webContents.send("update-error", error.message);
+    });
+  } finally {
+    if (blockerId !== null) powerSaveBlocker.stop(blockerId);
+    updateDownloadInProgress = false;
+    downloadUpdatePromise = null;
+    updateTimestampFile({ downloadingUpdate: false });
+  }
+}
+
+/**
+ * Register update-related IPC handlers
+ */
+function registerUpdateHandlers() {
+  installUpdate
+    .cleanupStaleUpdates()
+    .catch(error =>
+      console.warn("Could not remove leftover macOS updates:", error.message)
+    );
+  pruneMacCache().catch(error =>
+    console.warn("Could not prune cached macOS updates:", error.message)
+  );
+  ipcMain.handle("check-for-updates", async () => {
+    if (isDev) return true;
+    try {
+      // Language generation can take minutes; app update checks must stay responsive.
+      void checkReferenceLanguage();
+      return await checkVersionAndUpdate();
+    } catch (error) {
+      console.error("Error checking for updates:", error);
+      return true;
+    }
+  });
+
+  ipcMain.handle("is-portable", () => isPortable);
+  ipcMain.handle("get-automatic-update-capability", () => automaticUpdateCapability());
+
+  // Branch switching needs the installed version, so portable copies get no offer
+  ipcMain.handle("get-live-update-offer", () => (isPortable ? null : liveUpdateOffer));
+
+  ipcMain.handle("download-update", async () => {
+    if (isLatest) return;
+    if (!automaticUpdateCapability().supported) {
+      await shell.openExternal(PORTABLE_RELEASES_URL);
+      return;
+    }
+    if (updateDownloaded) return; // Already downloaded
+
+    try {
+      // If download is already in progress, wait for it
+      if (downloadUpdatePromise) {
+        await downloadUpdatePromise;
+      } else if (!updateDownloadInProgress) {
+        // Start download with proper timestamp tracking
+        updateTimestampFile({
+          downloadingUpdate: true,
+        });
+
+        downloadUpdatePromise = downloadUpdateInBackground();
+        await downloadUpdatePromise;
+      } else {
+        console.log("Update download already in progress, waiting...");
+      }
+    } catch (error) {
+      console.error("Error during update download:", error);
+      updateTimestampFile({
+        downloadingUpdate: false,
+      });
+      throw error;
+    }
+  });
+
+  ipcMain.handle("update-ascendara", async () => {
+    try {
+      if (isLatest) throw new Error("No update is available.");
+      if (isPortable)
+        throw new Error("Download the new portable version from the release page.");
+      if (!updateDownloaded) {
+        if (!downloadUpdatePromise) {
+          downloadUpdatePromise = downloadUpdateInBackground();
+        }
+        await downloadUpdatePromise;
+      }
+      if (!updateDownloaded)
+        throw new Error("The update could not be downloaded. Please retry.");
+
+      const installerPath = path.join(
+        os.tmpdir(),
+        "ascendarainstaller",
+        process.platform === "darwin"
+          ? "AscendaraInstaller.zip"
+          : isWindows
+            ? "AscendaraInstaller.exe"
+            : "AscendaraInstaller.AppImage"
+      );
+      await installUpdate(installerPath, isLinux);
+      return { success: true };
+    } catch (error) {
+      console.error("Error installing update:", error);
+      updateTimestampFile({ isUpdating: false, downloadingUpdate: false });
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle("is-update-downloaded", () => {
+    return updateDownloaded;
+  });
+
+  ipcMain.handle("is-broken-version", () => {
+    return isBrokenVersion;
+  });
+
+  ipcMain.handle("switch-branch", async (_, branch) => {
+    if (isPortable)
+      return {
+        success: false,
+        error: "Branch switching needs the installed version of Ludex.",
+      };
+    if (!["live", "public-testing", "experimental"].includes(branch))
+      return { success: false, error: "Unknown branch" };
+    return reinstallBranch(branch, "branch-switch-progress");
+  });
+
+  // Files the installer puts in resources but antivirus can quarantine later
+  ipcMain.handle("get-missing-app-files", () => {
+    if (isDev || !isWindows) return [];
+    const resources = path.join(appDirectory, "resources");
+    return BUNDLED_WINDOWS_BINARIES.filter(
+      name => !fs.existsSync(path.join(resources, name))
+    );
+  });
+
+  // Reinstall the running branch over itself to restore missing app files
+  ipcMain.handle("repair-ascendara", async () => {
+    if (isPortable)
+      return {
+        success: false,
+        error: "Repairing needs the installed version of Ludex.",
+      };
+    return reinstallBranch(appBranch, "repair-progress");
+  });
+}
+
+/**
+ * Download and run the installer for a branch. Branch switches and repairs
+ * both reinstall the whole app this way.
+ */
+async function reinstallBranch(branch, progressChannel) {
+  const platform = isWindows ? "Windows" : isMac ? "macOS" : "Linux";
+  try {
+    const mainWindow = BrowserWindow.getAllWindows()[0];
+    const onProgress = progressSender(mainWindow, progressChannel);
+    const tempDir = path.join(os.tmpdir(), "ascendarainstaller");
+    await fs.ensureDir(tempDir);
+
+    if (isMac) {
+      const zipPath = path.join(tempDir, "AscendaraBranchInstaller.zip");
+      const version =
+        branch === "live"
+          ? (await axios.get(`${API_URL}/`, { timeout: 15000 })).data.appVer
+          : null;
+      const blockerId = powerSaveBlocker.start("prevent-app-suspension");
+      try {
+        await downloadMacBuild(
+          branch,
+          version,
+          zipPath,
+          {
+            "X-Ascendara-Client": "app",
+            "X-Ascendara-Version": testingVersion || appVersion,
+            "X-Ascendara-Platform": "macos",
+          },
+          onProgress
+        );
+      } finally {
+        powerSaveBlocker.stop(blockerId);
+      }
+      await rememberTestingBranch(branch);
+      await installUpdate(zipPath, false);
+      return { success: true };
+    }
+
+    const url =
+      branch === "live" ? await liveInstallerUrl() : await testingInstallerUrl(branch);
+    // Use testingVersion for testing branches, appVersion for live
+    const versionToSend =
+      branch === "public-testing" || branch === "experimental"
+        ? testingVersion
+        : appVersion;
+
+    const headers = {
+      "X-Ascendara-Client": "app",
+      "X-Ascendara-Version": versionToSend,
+      "X-Ascendara-Platform": isWindows ? "windows" : "linux",
+    };
+
+    const installerFileName = isWindows
+      ? "AscendaraBranchInstaller.exe"
+      : "AscendaraBranchInstaller.AppImage";
+    const installerPath = path.join(tempDir, installerFileName);
+
+    const response = await axios({
+      url,
+      method: "GET",
+      responseType: "stream",
+      headers: {
+        ...headers,
+        "Accept-Encoding": "gzip, deflate, br",
+        Connection: "keep-alive",
+        "Cache-Control": "no-cache",
+      },
+      maxRedirects: 5,
+      timeout: 30000,
+    });
+
+    const totalSize = parseInt(response.headers["content-length"], 10) || 0;
+    let downloadedSize = 0;
+
+    response.data.on("data", chunk => {
+      downloadedSize += chunk.length;
+      if (totalSize > 0) onProgress(Math.round((downloadedSize * 100) / totalSize));
+    });
+
+    await pipeline(response.data, fs.createWriteStream(installerPath));
+
+    await rememberTestingBranch(branch);
+    await installUpdate(installerPath, isLinux);
+
+    return { success: true };
+  } catch (error) {
+    console.error(`Error reinstalling ${branch}:`, error);
+
+    // Return error type and metadata for frontend translation
+    if (error.response?.status === 404) {
+      return {
+        success: false,
+        errorType: "notAvailable",
+        errorData: { branch, platform },
+      };
+    } else if (error.code === "ECONNREFUSED" || error.code === "ENOTFOUND") {
+      return {
+        success: false,
+        errorType: "connectionFailed",
+      };
+    } else if (error.code === "ETIMEDOUT") {
+      return {
+        success: false,
+        errorType: "timeout",
+      };
+    }
+
+    // Fallback to generic error message
+    return { success: false, error: error.message };
+  }
+}
+
+module.exports = {
+  checkBrokenVersion,
+  checkVersionAndUpdate,
+  checkReferenceLanguage,
+  downloadUpdateInBackground,
+  downloadUpdateFile,
+  isCompleteZip,
+  registerUpdateHandlers,
+  getIsLatest: () => isLatest,
+  getUpdateDownloaded: () => updateDownloaded,
+};

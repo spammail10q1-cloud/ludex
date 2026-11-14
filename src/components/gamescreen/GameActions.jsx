@@ -1,0 +1,348 @@
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { useLanguage } from "@/context/LanguageContext";
+import { cn } from "@/lib/utils";
+import { formatSessionTime } from "@/hooks/useGameSession";
+import {
+  AlertTriangle,
+  Bolt,
+  ChevronDown,
+  FileCheck2,
+  FileSearch,
+  FolderOpen,
+  FolderSync,
+  Heart,
+  ImageUp,
+  LayoutGrid,
+  Loader,
+  Monitor,
+  Pencil,
+  Play,
+  Settings2,
+  StopCircle,
+  Trash2,
+} from "lucide-react";
+
+const isOnMac = window.electron?.getPlatform?.() === "darwin";
+
+const formatBytes = bytes =>
+  bytes < 1024 * 1024
+    ? `${(bytes / 1024).toFixed(0)} KB`
+    : bytes < 1024 * 1024 * 1024
+      ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+      : `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+
+/** Primary play controls plus a single menu for everything that manages the install. */
+export default function GameActions({
+  game,
+  canLaunchGame,
+  executableExists,
+  isLaunching,
+  isRunning,
+  sessionElapsedMs = 0,
+  canStopGame = false,
+  isStoppingGame = false,
+  onStopGame,
+  isUninstalling,
+  onPlay,
+  onSetExecutable,
+  trainerExists,
+  launchWithTrainerEnabled,
+  onToggleTrainer,
+  isFavorite,
+  onToggleFavorite,
+  onOpenDirectory,
+  backupEnabled,
+  onBackupSaves,
+  onVerifyFiles,
+  onRepairDlls,
+  isRepairingDlls,
+  onLaunchOptions,
+  onCreateShortcut,
+  onCreateStartMenuShortcut,
+  showEditEntry,
+  onEditEntry,
+  onCustomizeArtwork,
+  isOnLinux,
+  prefixSize,
+  onResetPrefix,
+  onDelete,
+}) {
+  const { t } = useLanguage();
+
+  return (
+    <TooltipProvider>
+      {canLaunchGame ? (
+        <Button
+          data-tour="game-play"
+          size="lg"
+          variant={isRunning && !isLaunching ? "destructive" : "default"}
+          className={cn(
+            "h-12 min-w-[11rem] gap-2 px-8 text-base",
+            !(isRunning && !isLaunching) && "text-secondary"
+          )}
+          onClick={() => (isRunning ? onStopGame?.() : onPlay())}
+          disabled={isLaunching || isStoppingGame || (isRunning && !canStopGame)}
+        >
+          {isLaunching ? (
+            <>
+              <Loader className="h-5 w-5 animate-spin" />
+              {t("library.launching")}
+            </>
+          ) : isRunning ? (
+            <>
+              {isStoppingGame ? (
+                <Loader className="h-5 w-5 animate-spin" />
+              ) : (
+                <StopCircle className="h-5 w-5" />
+              )}
+              {isStoppingGame
+                ? t("library.stoppingGame")
+                : canStopGame
+                  ? t("library.stopGame")
+                  : t("library.running")}
+              {sessionElapsedMs > 0 && (
+                <span className="font-mono text-sm tabular-nums opacity-80">
+                  {formatSessionTime(sessionElapsedMs)}
+                </span>
+              )}
+            </>
+          ) : (
+            <>
+              <Play className="h-5 w-5 fill-current" />
+              {t("library.play")}
+            </>
+          )}
+        </Button>
+      ) : (
+        <Button
+          data-tour="game-play"
+          size="lg"
+          className="h-12 gap-2 px-8 text-base text-secondary"
+          onClick={onSetExecutable}
+        >
+          <FileSearch className="h-5 w-5" />
+          {t("library.setExecutable")}
+        </Button>
+      )}
+
+      {canLaunchGame && trainerExists && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <label className="flex h-12 cursor-pointer items-center gap-3 rounded-md border border-input px-4 text-sm font-medium">
+              <Bolt className="h-4 w-4 text-primary" />
+              {t("gameScreen.launchWithTrainer")}
+              <Switch
+                checked={launchWithTrainerEnabled}
+                onCheckedChange={onToggleTrainer}
+              />
+            </label>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <p className="max-w-[300px] text-secondary">
+              {t("gameScreen.launchWithTrainerDescription")}
+            </p>
+          </TooltipContent>
+        </Tooltip>
+      )}
+
+      <div data-tour="game-quick" className="ml-auto flex flex-wrap items-center gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              className="h-12 w-12 p-0 text-muted-foreground hover:text-primary"
+              onClick={onToggleFavorite}
+              aria-pressed={isFavorite}
+            >
+              <Heart
+                className={cn(
+                  "h-5 w-5",
+                  isFavorite ? "fill-primary text-primary" : "fill-none"
+                )}
+              />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <p className="text-secondary">
+              {isFavorite
+                ? t("library.removeFromFavorites")
+                : t("library.addToFavorites")}
+            </p>
+          </TooltipContent>
+        </Tooltip>
+
+        <Button variant="outline" className="h-12 gap-2" onClick={onOpenDirectory}>
+          <FolderOpen className="h-4 w-4" />
+          {t("library.openGameDirectory")}
+        </Button>
+
+        {/* Non-modal so the dialogs these items open keep working pointer events */}
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button data-tour="game-manage" variant="outline" className="h-12 gap-2">
+              <Settings2 className="h-4 w-4" />
+              {t("library.manage")}
+              {!executableExists && <AlertTriangle className="h-4 w-4 text-yellow-500" />}
+              <ChevronDown className="h-4 w-4 opacity-60" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-72">
+            <DropdownMenuItem className="gap-2" onSelect={onLaunchOptions}>
+              <Bolt className="h-4 w-4" />
+              {t("gameScreen.launchOptions")}
+            </DropdownMenuItem>
+            {isRunning && (
+              <>
+                <div className="flex items-center gap-2 px-2 py-1.5 text-sm">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
+                  <span className="font-medium">{t("library.runningSession")}</span>
+                  <span className="ml-auto font-mono tabular-nums text-muted-foreground">
+                    {formatSessionTime(sessionElapsedMs)}
+                  </span>
+                </div>
+                {canStopGame && (
+                  <DropdownMenuItem
+                    className="gap-2 text-red-500 focus:bg-red-500/10 focus:text-red-500"
+                    disabled={isStoppingGame}
+                    onSelect={onStopGame}
+                  >
+                    <StopCircle className="h-4 w-4" />
+                    {t("library.stopGame")}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+              </>
+            )}
+            <DropdownMenuItem
+              className="gap-2"
+              disabled={isRunning}
+              onSelect={onSetExecutable}
+            >
+              <Pencil className="h-4 w-4" />
+              {t("library.changeExecutable")}
+              {!executableExists && (
+                <AlertTriangle
+                  className="ml-auto h-4 w-4 text-yellow-500"
+                  title={t("library.executableNotFound")}
+                />
+              )}
+            </DropdownMenuItem>
+            {showEditEntry && (
+              <DropdownMenuItem className="gap-2" onSelect={onEditEntry}>
+                <Settings2 className="h-4 w-4" />
+                {t("gameScreen.editGameEntry")}
+              </DropdownMenuItem>
+            )}
+            {onCustomizeArtwork && (
+              <DropdownMenuItem
+                className="gap-2"
+                disabled={isRunning}
+                onSelect={onCustomizeArtwork}
+              >
+                <ImageUp className="h-4 w-4" />
+                {t("library.customizeArtwork") || "Customize artwork"}
+              </DropdownMenuItem>
+            )}
+
+            <DropdownMenuSeparator />
+
+            <DropdownMenuItem
+              className="items-start gap-2"
+              disabled={!backupEnabled}
+              onSelect={onBackupSaves}
+            >
+              <FolderSync className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                {t("gameScreen.backupSaves")}
+                {!backupEnabled && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {t("gameScreen.backupSavesDisabledTooltip")}
+                  </p>
+                )}
+              </div>
+            </DropdownMenuItem>
+            {!game.isCustom && (
+              <>
+                <DropdownMenuItem
+                  className="gap-2"
+                  disabled={isRunning}
+                  onSelect={onVerifyFiles}
+                >
+                  <FileCheck2 className="h-4 w-4" />
+                  {t("library.verifyGameFiles")}
+                </DropdownMenuItem>
+                {!game.privateSource && game.gameID && (
+                  <DropdownMenuItem
+                    className="gap-2"
+                    onSelect={onRepairDlls}
+                    disabled={isRunning || isRepairingDlls}
+                  >
+                    <FileCheck2 className="h-4 w-4" />
+                    {t(
+                      isRepairingDlls ? "downloads.dllRepairing" : "downloads.dllRepair"
+                    )}
+                  </DropdownMenuItem>
+                )}
+              </>
+            )}
+            {isOnLinux && (
+              <DropdownMenuItem
+                className="gap-2"
+                disabled={isRunning}
+                onSelect={onResetPrefix}
+              >
+                <FolderSync className="h-4 w-4" />
+                {t("gameScreen.resetPrefix")}
+                {prefixSize > 0 && (
+                  <span className="ml-auto text-xs opacity-60">
+                    {formatBytes(prefixSize)}
+                  </span>
+                )}
+              </DropdownMenuItem>
+            )}
+
+            <DropdownMenuSeparator />
+
+            <DropdownMenuItem className="gap-2" onSelect={onCreateShortcut}>
+              <Monitor className="h-4 w-4" />
+              {t("library.createShortcut")}
+            </DropdownMenuItem>
+            <DropdownMenuItem className="gap-2" onSelect={onCreateStartMenuShortcut}>
+              <LayoutGrid className="h-4 w-4" />
+              {isOnMac
+                ? t("library.addToApplications")
+                : t("library.createStartMenuShortcut")}
+            </DropdownMenuItem>
+
+            <DropdownMenuSeparator />
+
+            <DropdownMenuItem
+              className="gap-2 text-red-500 focus:bg-red-500/10 focus:text-red-500"
+              disabled={isUninstalling || isRunning}
+              onSelect={onDelete}
+            >
+              <Trash2 className="h-4 w-4" />
+              {game.isCustom
+                ? t("library.removeGameFromLibrary")
+                : t("library.deleteGame")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </TooltipProvider>
+  );
+}

@@ -1,0 +1,162 @@
+const fs = require("fs-extra");
+const path = require("path");
+const { spawn } = require("child_process");
+const { app } = require("electron");
+
+/**
+ * Delete a folder that holds a copy of the app. Electron's fs reads app.asar
+ * files as directories, so fs-extra can't delete one (ENOTEMPTY) and failed
+ * updates stayed behind; original-fs sees them as the files they are.
+ */
+async function removeTree(target) {
+  let rawFs = fs;
+  try {
+    rawFs = require("original-fs");
+  } catch {
+    // Outside Electron there is no asar patching
+  }
+  await rawFs.promises.rm(target, { recursive: true, force: true });
+}
+
+// Share the same installation path for automatic updates and branch switches.
+module.exports = async function installUpdate(installerPath, isLinux) {
+  let command = installerPath;
+  let args = [];
+  let stagingDir;
+  try {
+    if (process.platform === "darwin") {
+      const match = process.execPath.match(/^(.*?\.app)\/Contents\/MacOS\//);
+      if (!match) throw new Error("Automatic updates require an installed macOS app.");
+      const target = match[1];
+      const parent = path.dirname(target);
+      stagingDir = fs.mkdtempSync(path.join(parent, ".ascendara-update-"));
+      const extracted = path.join(stagingDir, "extracted");
+      fs.mkdirSync(extracted);
+      await new Promise((resolve, reject) => {
+        const child = spawn("ditto", ["-x", "-k", installerPath, extracted]);
+        child.once("error", reject);
+        child.once("close", code =>
+          code === 0
+            ? resolve()
+            : reject(new Error(`Could not extract macOS update (${code}).`))
+        );
+      });
+      const apps = fs.readdirSync(extracted).filter(name => name.endsWith(".app"));
+      if (apps.length !== 1)
+        throw new Error("The macOS update archive must contain one app.");
+      // Check the app where it was extracted, before it moves into place
+      const extractedApp = path.join(extracted, apps[0]);
+      if (
+        !fs.existsSync(path.join(extractedApp, "Contents", "Info.plist")) ||
+        !fs.existsSync(path.join(extractedApp, "Contents", "MacOS"))
+      ) {
+        throw new Error("The macOS update archive does not contain a valid app.");
+      }
+      const stagedApp = path.join(stagingDir, apps[0]);
+      fs.moveSync(extractedApp, stagedApp);
+      fs.removeSync(extracted);
+      const scriptPath = path.join(stagingDir, "install.sh");
+      fs.writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+while kill -0 "$1" 2>/dev/null; do sleep 1; done
+if mv "$3" "$4"; then
+  if mv "$2" "$3"; then
+    rm -rf "$4"
+    open "$3"
+    rm -f "$0"
+    rmdir "$5"
+  else
+    mv "$4" "$3"
+  fi
+fi
+`
+      );
+      command = "sh";
+      args = [
+        scriptPath,
+        String(process.pid),
+        stagedApp,
+        target,
+        path.join(stagingDir, "backup.app"),
+        stagingDir,
+      ];
+    } else if (isLinux) {
+      if (!process.env.APPIMAGE) {
+        throw new Error("Automatic updates require running the installed AppImage.");
+      }
+      // A wrong-platform installer would replace the AppImage and never launch
+      const magic = Buffer.alloc(4);
+      const handle = await fs.open(installerPath, "r");
+      try {
+        await fs.read(handle, magic, 0, 4, 0);
+      } finally {
+        await fs.close(handle);
+      }
+      if (!magic.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
+        throw new Error("The downloaded update is not a Linux AppImage. Please retry.");
+      }
+      const target = fs.realpathSync(process.env.APPIMAGE);
+      // Stage beside the installed image so replacement is an atomic rename and
+      // permission/disk errors are reported while the app can still show them.
+      stagingDir = fs.mkdtempSync(path.join(path.dirname(target), ".ascendara-update-"));
+      const stagedImage = path.join(stagingDir, "Ludex.AppImage");
+      await fs.copy(installerPath, stagedImage);
+      fs.chmodSync(stagedImage, 0o755);
+      const scriptPath = path.join(stagingDir, "install.sh");
+      fs.writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+while kill -0 "$1" 2>/dev/null; do sleep 1; done
+if mv -f -- "$2" "$3"; then
+  rm -f -- "$0"
+  rmdir -- "$4"
+  "$3" &
+fi
+`
+      );
+      command = "sh";
+      args = [scriptPath, String(process.pid), stagedImage, target, stagingDir];
+    }
+
+    await new Promise((resolve, reject) => {
+      const child = spawn(command, args, {
+        detached: true,
+        stdio: "ignore",
+        cwd: isLinux ? path.dirname(process.env.APPIMAGE) : undefined,
+      });
+      child.once("error", reject);
+      child.once("spawn", () => {
+        child.unref();
+        resolve();
+      });
+    });
+  } catch (error) {
+    if (stagingDir) await removeTree(stagingDir);
+    throw error;
+  }
+  app.isQuitting = true;
+  app.quit();
+};
+
+/**
+ * Remove .ascendara-update-* folders an update left beside the macOS app, as a
+ * failed extraction or an interrupted install did. Each holds a copy of the
+ * app, several hundred MB.
+ */
+module.exports.cleanupStaleUpdates = async function cleanupStaleUpdates() {
+  if (process.platform !== "darwin") return;
+  const match = process.execPath.match(/^(.*?\.app)\/Contents\/MacOS\//);
+  if (!match) return;
+  const parent = path.dirname(match[1]);
+  const entries = await fs.readdir(parent).catch(() => []);
+  for (const name of entries) {
+    if (!name.startsWith(".ascendara-update-")) continue;
+    const staged = path.join(parent, name);
+    // An install script may still be using a fresh one
+    const { mtimeMs } = await fs.stat(staged);
+    if (Date.now() - mtimeMs < 10 * 60 * 1000) continue;
+    await removeTree(staged);
+    console.log("Removed leftover macOS update:", staged);
+  }
+};

@@ -1,0 +1,242 @@
+import torbox from "./debrid/torboxProvider";
+import realDebrid from "./debrid/realDebridProvider";
+import allDebrid from "./debrid/allDebridProvider";
+import premiumize from "./debrid/premiumizeProvider";
+import debridLink from "./debrid/debridLinkProvider";
+import { handoffTorrents, removeFinishedTorrents } from "./debridTorrentHandoff";
+
+// TorBox is first by default; only an explicitly saved order overrides this.
+export const debridProviders = [torbox, realDebrid, allDebrid, premiumize, debridLink];
+
+export function createDebridService(providers) {
+  const getProvider = id => providers.find(provider => provider.id === id) || null;
+  const getApiKey = (settings, provider) =>
+    settings?.[provider?.apiKeySetting]?.trim() || "";
+  const getOrderedProviders = settings => {
+    const saved =
+      Array.isArray(settings?.debridProviderOrder) && settings.debridProviderOrder.length
+        ? settings.debridProviderOrder
+        : [];
+    const ids = [...new Set([...saved, ...providers.map(provider => provider.id)])];
+    return ids.map(getProvider).filter(Boolean);
+  };
+  const getConfiguredProviders = settings =>
+    settings?.debridEnabled !== true
+      ? []
+      : getOrderedProviders(settings).filter(
+          provider =>
+            getApiKey(settings, provider) &&
+            settings?.debridProviderEnabled?.[provider.id] !== false
+        );
+  const getPreferredProvider = settings => getConfiguredProviders(settings)[0] || null;
+  const getTorrentProvider = settings =>
+    getConfiguredProviders(settings).find(
+      provider => provider.submitMagnet && settings[provider.torrentSetting] !== false
+    ) || null;
+  const canUseCloudTorrents = settings => Boolean(getTorrentProvider(settings));
+  const getSupportedHosts = async settings =>
+    Object.fromEntries(
+      await Promise.all(
+        getConfiguredProviders(settings).map(async provider => [
+          provider.id,
+          await provider.getSupportedHosts(),
+        ])
+      )
+    );
+  const getHostProvider = (settings, host, link, hostsByProvider) => {
+    if (!host || ["torrent", "direct"].includes(host)) return null;
+    return (
+      getConfiguredProviders(settings).find(
+        provider =>
+          provider.resolveHost &&
+          (settings[provider.prioritizeSetting] ||
+            !(provider.seamlessHosts || []).includes(host)) &&
+          provider.isSupportedUrl(link, hostsByProvider?.[provider.id])
+      ) || null
+    );
+  };
+  const canUseForHost = (settings, host, link, hostsByProvider) =>
+    Boolean(getHostProvider(settings, host, link, hostsByProvider));
+  // Per-download picker: "default" keeps the saved order, "none" skips debrid.
+  const getPickerOptions = settings => [
+    "default",
+    ...getConfiguredProviders(settings).map(provider => provider.id),
+    "none",
+  ];
+  const getPickedProvider = (settings, pick) =>
+    getConfiguredProviders(settings).find(provider => provider.id === pick) || null;
+  const getPickedHostProvider = (settings, pick, host, link, hostsByProvider) => {
+    if (!pick || pick === "default")
+      return {
+        provider: getHostProvider(settings, host, link, hostsByProvider),
+        supported: true,
+      };
+    if (pick === "none") return { provider: null, supported: true };
+    const provider = getPickedProvider(settings, pick);
+    const supported = Boolean(
+      provider?.resolveHost &&
+      host &&
+      !["torrent", "direct"].includes(host) &&
+      provider.isSupportedUrl(link, hostsByProvider?.[provider.id])
+    );
+    return { provider, supported };
+  };
+  const getPickedTorrentProvider = (settings, pick) => {
+    if (!pick || pick === "default")
+      return { provider: getTorrentProvider(settings), supported: true };
+    if (pick === "none") return { provider: null, supported: true };
+    const provider = getPickedProvider(settings, pick);
+    const supported = Boolean(
+      provider?.submitMagnet && settings[provider.torrentSetting] !== false
+    );
+    return { provider, supported };
+  };
+  const allowsTorrentFallback = (settings, providerId) => {
+    if (settings?.torrentEnabled !== true) return false;
+
+    const picked = providerId
+      ? getPickedTorrentProvider(settings, providerId)
+      : { provider: getTorrentProvider(settings), supported: true };
+    const provider = picked.supported ? picked.provider : null;
+
+    return Boolean(
+      provider?.torrentFallbackSetting &&
+        settings[provider.torrentFallbackSetting] === true
+    );
+  };
+  const remember = (provider, data) => {
+    try {
+      const stored = JSON.parse(
+        localStorage.getItem(provider.metadataStorageKey) || "{}"
+      );
+      localStorage.setItem(
+        provider.metadataStorageKey,
+        JSON.stringify({ ...stored, ...provider.serializeMetadata(data) })
+      );
+    } catch (error) {
+      console.warn(`Could not save ${provider.name} download metadata:`, error);
+    }
+  };
+  const submitMagnet = async (settings, link, game, directory = 0, providerId) => {
+    const picked = providerId
+      ? getPickedTorrentProvider(settings, providerId)
+      : { provider: getTorrentProvider(settings), supported: true };
+    const provider = picked.supported ? picked.provider : null;
+    if (!provider) throw new Error("No debrid provider is enabled for torrents.");
+    const result = await provider.submitMagnet(link, getApiKey(settings, provider), game);
+    remember(provider, {
+      result,
+      kind: "torrent",
+      link,
+      host: "torrent",
+      game,
+      directory,
+    });
+    // Start metadata-ready torrents immediately; the app-wide task retries conversions.
+    if (provider.resumePendingTorrents) {
+      void provider
+        .resumePendingTorrents(getApiKey(settings, provider), settings)
+        .catch(error => {
+          console.warn(
+            `[Debrid] ${provider.name} torrent startup will retry:`,
+            error.message
+          );
+        });
+    }
+    return { ...result, providerId: provider.id, downloadsPath: provider.downloadsPath };
+  };
+  // Settled per service: one failing must not hide the downloads another one started.
+  const resumePendingTorrents = settings =>
+    Promise.allSettled(
+      getConfiguredProviders(settings).map(async provider => {
+        const apiKey = getApiKey(settings, provider);
+        try {
+          if (
+            !(provider.resumePendingTorrents || provider.getTorrentDownload) ||
+            settings[provider.torrentSetting] === false
+          )
+            return undefined;
+          await provider.resumePendingTorrents?.(apiKey, settings);
+          return await handoffTorrents(provider, apiKey, settings);
+        } finally {
+          // Also when this service's handoff failed, or its torrent toggle is off.
+          if (settings[provider.removeAfterDoneSetting])
+            await removeFinishedTorrents(provider, apiKey).catch(error =>
+              console.warn(`[Debrid] ${provider.name} cleanup will retry:`, error.message)
+            );
+        }
+      })
+    );
+  const resolveHost = async (settings, link, host, game, directory = 0, providerId) => {
+    if (settings?.debridEnabled !== true)
+      throw new Error("Debrid services are disabled.");
+    const normalizedLink = link.startsWith("//") ? `https:${link}` : link;
+    // A queued download remembers its service (and no host name). Once that service
+    // is paused or disconnected, another service in use that supports the link takes it.
+    const configured = getConfiguredProviders(settings);
+    const hosts = await getSupportedHosts(settings);
+    const provider = providerId
+      ? configured.find(item => item.id === providerId) ||
+        configured.find(
+          item => item.resolveHost && item.isSupportedUrl(normalizedLink, hosts[item.id])
+        )
+      : getHostProvider(settings, host, normalizedLink, hosts);
+    if (!provider) throw new Error("No configured debrid service supports this URL.");
+    if (!provider.resolveHost || !getApiKey(settings, provider))
+      throw new Error("Debrid provider is not configured.");
+    if (!provider.isSupportedUrl(normalizedLink, await provider.getSupportedHosts())) {
+      throw new Error(`This URL is not in ${provider.name}’s supported host list.`);
+    }
+    const result = await provider.resolveHost(
+      normalizedLink,
+      getApiKey(settings, provider)
+    );
+    if (game)
+      remember(provider, {
+        result,
+        kind: "download",
+        link: normalizedLink,
+        host,
+        game,
+        directory,
+      });
+    return { ...result, providerId: provider.id, downloadsPath: provider.downloadsPath };
+  };
+  return {
+    getProvider,
+    getOrderedProviders,
+    getConfiguredProviders,
+    getPreferredProvider,
+    getTorrentProvider,
+    getHostProvider,
+    getSupportedHosts,
+    canUseCloudTorrents,
+    canUseForHost,
+    getPickerOptions,
+    getPickedHostProvider,
+    getPickedTorrentProvider,
+    allowsTorrentFallback,
+    submitMagnet,
+    resumePendingTorrents,
+    resolveHost,
+  };
+}
+
+export const {
+  getProvider,
+  getOrderedProviders,
+  getConfiguredProviders,
+  getPreferredProvider,
+  getTorrentProvider,
+  getHostProvider,
+  getSupportedHosts,
+  canUseCloudTorrents,
+  canUseForHost,
+  getPickerOptions,
+  getPickedHostProvider,
+  getPickedTorrentProvider,
+  allowsTorrentFallback,
+  submitMagnet,
+  resumePendingTorrents,
+  resolveHost,
+} = createDebridService(debridProviders);

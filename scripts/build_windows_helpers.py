@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Compile the Windows helpers required by package.json on a native x64 host.
+
+The historical .bat/.spec files are not in Git; this is the checked-in recipe.
+"""
+import platform
+import shutil
+import subprocess
+import sys
+from build_support import ROOT, validate_resources
+
+
+def run(args, cwd=ROOT):
+    subprocess.run([str(arg) for arg in args], cwd=cwd, check=True)
+
+
+def main():
+    if sys.platform != 'win32' or platform.machine().lower() not in ('amd64', 'x86_64'):
+        raise RuntimeError('Use a native Windows x64 host')
+    for command in ('cargo', 'yarn.cmd'):
+        if not shutil.which(command):
+            raise RuntimeError(f'Missing dependency: {command}')
+    names = ('AscendaraNotificationHelper',)
+    venv = ROOT / '.build_venv' / 'Scripts/python.exe'
+    run([sys.executable, '-m', 'venv', venv.parent.parent])
+    run([venv, '-m', 'pip', 'install', 'pyinstaller==6.16.0'])
+    for name in names:
+        run([venv, '-m', 'pip', 'install', '-r', ROOT / 'binaries' / name / 'requirements.txt'])
+    for name in names:
+        folder = ROOT / 'binaries' / name
+        command = [venv, '-m', 'PyInstaller', '--onefile', '--noconfirm', '--clean',
+                   '--name', name, '--icon', folder / 'src/ascendara.ico',
+                   '--distpath', folder / 'dist', '--workpath', folder / 'build',
+                   '--specpath', folder / 'build',
+                   '--add-data', f'{folder / "src/ascendara.ico"};.']
+        # The app starts these in the background; as console programs Windows
+        # would open a terminal window for each one
+        command += ['--windowed']
+        if name == 'AscendaraNotificationHelper':
+            command += ['--add-data', f'{folder / "src/sounds"};sounds',
+                        '--hidden-import', 'PyQt6.QtMultimedia']
+        run([*command, folder / 'src' / f'{name}.py'])
+    for name in ('AscendaraCrashReporter', 'AscendaraGameHandler', 'AscendaraDownloader'):
+        run(['cargo', 'build', '--release', '--locked'], ROOT / 'binaries' / name)
+    watcher = ROOT / 'binaries/AscendaraAchievementWatcher'
+    run(['yarn.cmd', 'install', '--frozen-lockfile'], watcher)
+    run(['yarn.cmd', 'build-win'], watcher)
+    validate_resources('win')
+
+
+if __name__ == '__main__':
+    main()

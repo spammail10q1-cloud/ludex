@@ -1,0 +1,136 @@
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const { parse } = require("@babel/parser");
+const traverse = require("@babel/traverse").default;
+const { loadModule } = require("./helpers/loadModule.cjs");
+
+const source = fs.readFileSync(
+  path.join(__dirname, "../src/pages/big-picture/useBigPicturePage.js"),
+  "utf8"
+);
+// handleStartDownload and the helpers it calls to start a direct download
+const extracted = {};
+const wanted = ["handleStartDownload", "startResolvedDownload", "launchDownload"];
+traverse(parse(source, { sourceType: "module", plugins: ["jsx"] }), {
+  VariableDeclarator(nodePath) {
+    const name = nodePath.node.id.name;
+    if (wanted.includes(name)) {
+      extracted[name] = source.slice(nodePath.node.init.start, nodePath.node.init.end);
+    }
+  },
+});
+
+test("Big Picture respects normal host priority and hands any adapter's cloud downloads to desktop", async t => {
+  const { createDebridService } = await loadModule(
+    "src/services/downloads/debridService.js"
+  );
+  const provider = {
+    id: "third",
+    apiKeySetting: "thirdKey",
+    torrentSetting: "thirdTorrents",
+    prioritizeSetting: "thirdPriority",
+    seamlessHosts: ["gofile"],
+    getSupportedHosts: async () => ["files.test", "gofile.io"],
+    isSupportedUrl: (url, domains) => domains.includes(new URL(url).hostname),
+    resolveHost: async () => {},
+    submitMagnet: async () => {},
+  };
+  const debrid = createDebridService([provider]);
+  const { isMagnetLink, isTorrentLink } = await loadModule(
+    "src/services/downloads/torrentLink.js"
+  );
+  const canDownloadTorrentLinks = (links, settings) =>
+    (settings?.torrentEnabled === true && links.some(isTorrentLink)) ||
+    (debrid.canUseCloudTorrents(settings) && links.some(isMagnetLink));
+
+  for (const [name, extraSettings, preferredHost, links, expected] of [
+    [
+      "normal seamless priority",
+      {},
+      null,
+      { custom: ["https://files.test/file"], gofile: ["https://gofile.io/d/file"] },
+      "direct",
+    ],
+    [
+      "debrid priority",
+      { thirdPriority: true },
+      null,
+      { custom: ["https://files.test/file"], gofile: ["https://gofile.io/d/file"] },
+      "handoff",
+    ],
+    [
+      "explicit hosted selection",
+      {},
+      "custom",
+      { custom: ["https://files.test/file"], gofile: ["https://gofile.io/d/file"] },
+      "handoff",
+    ],
+    ["cloud torrent", {}, null, { torrent: ["magnet:?xt=test"] }, "handoff"],
+    [
+      "local raw torrent",
+      { torrentEnabled: true, thirdTorrents: false },
+      null,
+      { torrent: ["https://example.test/game.torrent"] },
+      "handoff",
+    ],
+  ]) {
+    await t.test(name, async () => {
+      const downloads = [];
+      let exited = false;
+      const context = vm.createContext({
+        settings: { debridEnabled: true, thirdKey: "key", ...extraSettings },
+        debrid,
+        canDownloadTorrentLinks,
+        isMagicLink: () => false,
+        isAuthenticated: true,
+        setPendingDownloadData: () => {},
+        setShowQueuePrompt: () => {},
+        SEAMLESS_PROVIDERS: ["gofile", "pixeldrain"],
+        hasActiveDownloads: async () => false,
+        sanitizeText: value => value,
+        window: {
+          electron: {
+            downloadFile: async (...args) => {
+              downloads.push(args);
+              return { success: true };
+            },
+          },
+        },
+        setDownloadingGame: () => {},
+        setShowExitDialog: value => {
+          exited = value;
+        },
+        changeView: () => {},
+        t: key => key,
+        console,
+        toast: { success: () => {}, error: message => assert.fail(message) },
+      });
+      vm.runInContext(
+        wanted
+          .slice(1)
+          .map(name => `var ${name} = ${extracted[name]};`)
+          .join("\n"),
+        context
+      );
+      const start = vm.runInContext(`(${extracted.handleStartDownload})`, context);
+      await start({ game: "Example", download_links: links }, preferredHost);
+      assert.equal(exited, expected === "handoff");
+      assert.equal(downloads.length, expected === "direct" ? 1 : 0);
+      if (downloads.length) assert.equal(downloads[0][0], "https://gofile.io/d/file");
+    });
+  }
+});
+
+test("Big Picture resume surfaces the main-process error instead of hiding it", () => {
+  assert.match(
+    source,
+    /toast\.error\(result\.error \|\| t\("downloads\.resumeError"\)\)/
+  );
+  assert.match(
+    source,
+    /toast\.error\(error\.message \|\| t\("downloads\.resumeError"\)\)/
+  );
+});

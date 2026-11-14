@@ -1,0 +1,284 @@
+/**
+ * Configuration and Constants Module
+ * Contains app configuration, API keys, and constant values
+ */
+
+const path = require("path");
+const os = require("os");
+const fs = require("fs");
+const { app } = require("electron");
+
+// Environment detection
+const isDev = !app.isPackaged;
+const isWindows = os.platform().startsWith("win");
+// electron-builder's portable target sets this before starting the app. Portable
+// copies can't run the Setup installer to update, so updates go via the release page.
+const isPortable = isWindows && Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
+const isMac = process.platform === "darwin";
+const isLinux = process.platform === "linux";
+
+// Shared Unix tool storage; Proton paths remain Linux-only.
+const unixConfigDir = !isWindows ? path.join(os.homedir(), ".ascendara") : null;
+
+// Linux-specific paths
+const linuxConfigDir = isLinux ? path.join(os.homedir(), ".ascendara") : null;
+const linuxCompatDataDir = isLinux ? path.join(linuxConfigDir, "compatdata") : null;
+const linuxRunnersDir = isLinux ? path.join(linuxConfigDir, "runners") : null;
+
+const linuxUmuDir = isLinux ? path.join(linuxConfigDir, "tools", "umu") : null;
+const linuxUmuBin = isLinux ? path.join(linuxUmuDir, "umu-run") : null;
+const linuxUmuDbPath = isLinux ? path.join(linuxConfigDir, "umu_database.csv") : null;
+
+// Steam common paths for Proton detection
+const STEAM_COMMON_PATHS = isLinux
+  ? [
+      path.join(os.homedir(), ".steam/root/steamapps/common"),
+      path.join(os.homedir(), ".steam/steam/steamapps/common"),
+      path.join(os.homedir(), ".local/share/Steam/steamapps/common"),
+      path.join(
+        os.homedir(),
+        ".var/app/com.valvesoftware.Steam/data/Steam/steamapps/common"
+      ),
+    ]
+  : [];
+
+const STEAM_INSTALL_PATHS = isLinux
+  ? [
+      path.join(os.homedir(), ".steam/steam"),
+      path.join(os.homedir(), ".steam/root"),
+      path.join(os.homedir(), ".local/share/Steam"),
+      path.join(os.homedir(), ".var/app/com.valvesoftware.Steam/data/Steam"),
+    ]
+  : [];
+
+// File paths. Windows uses %APPDATA%\ascendara (next to ascendarasettings.json)
+// because the profile root is often locked down by antivirus or read-only flags.
+const appConfigDir = isWindows
+  ? path.join(process.env.APPDATA, "ascendara")
+  : unixConfigDir;
+const TIMESTAMP_FILE = path.join(appConfigDir, "timestamp.ascendara.json");
+
+// Older versions kept these files loose in the home directory. Move them into
+// the config directory before anything else reads or writes them.
+function migrateHomeFiles() {
+  try {
+    fs.mkdirSync(appConfigDir, { recursive: true });
+  } catch (error) {
+    console.error("Failed to create config directory:", error);
+    return;
+  }
+  for (const name of [
+    "timestamp.ascendara.json",
+    "onboarding.ascendara.json",
+    "translation_progress.ascendara.json",
+    "branch.ascendara.json",
+  ]) {
+    const legacy = path.join(os.homedir(), name);
+    const target = path.join(appConfigDir, name);
+    try {
+      if (!fs.existsSync(legacy)) continue;
+      if (fs.existsSync(target)) {
+        fs.rmSync(legacy, { force: true });
+        continue;
+      }
+      try {
+        fs.renameSync(legacy, target);
+      } catch {
+        // Cross-device or locked files can't be renamed; copy and leave the
+        // old one behind if it can't be removed
+        fs.copyFileSync(legacy, target);
+        try {
+          fs.rmSync(legacy, { force: true });
+        } catch (error) {
+          console.error(`Failed to remove old ${name}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error(`Failed to migrate ${name}:`, error);
+    }
+  }
+}
+migrateHomeFiles();
+
+const LANG_DIR = isWindows
+  ? path.join(process.env.LOCALAPPDATA, "Ludex", "languages")
+  : isMac
+    ? path.join(os.homedir(), "Library/Application Support/ascendara/languages")
+    : path.join(os.homedir(), ".ascendara", "languages");
+
+const appDirectory = path.join(path.dirname(app.getPath("exe")));
+
+// Load production config
+let config;
+try {
+  config = require("../../config.prod.js");
+} catch (e) {
+  config = {};
+}
+
+// API Keys
+// NOTE: Sensitive keys have been moved to backend (api.ascendara.app)
+// These are kept for backward compatibility but will be null/undefined
+const APIKEY = process.env.REACT_APP_AUTHORIZATION || config.AUTHORIZATION || null;
+const analyticsAPI =
+  process.env.REACT_APP_ASCENDARA_API_KEY || config.ASCENDARA_API_KEY || null;
+const steamWebApiKey = null; // Now handled by backend proxy
+const steamGridDbApiKey = null; // Now handled by backend proxy
+const imageKey = process.env.REACT_APP_IMAGE_KEY || config.IMAGE_KEY || null;
+const clientId = process.env.REACT_APP_DISCKEY || config.DISCKEY;
+
+// Returns the Python interpreter path: venv if set up, otherwise system python3
+function getPythonPath() {
+  if (isWindows) return "python";
+  const venvPython = path.join(os.homedir(), ".ascendara", "venv", "bin", "python3");
+  return fs.existsSync(venvPython) ? venvPython : "python3";
+}
+
+// Helpers written in Rust are built with cargo instead of PyInstaller.
+const CARGO_HELPERS = new Set(["AscendaraDownloader"]);
+
+function getHelperPath(name) {
+  const filename = name + (isWindows ? ".exe" : "");
+  if (!isDev) return path.join(process.resourcesPath, filename);
+  const output = CARGO_HELPERS.has(name) ? ["target", "release"] : ["dist"];
+  return path.resolve(__dirname, "../../../binaries", name, ...output, filename);
+}
+
+function getLudusaviPath() {
+  const local = path.join(unixConfigDir || appDirectory, "ludusavi");
+  if (fs.existsSync(local)) return local;
+  return isMac ? require("../compat/wine-setup").findCommand("ludusavi") : null;
+}
+
+// Tool executables mapping
+const toolExecutables = {
+  translator: isWindows
+    ? "AscendaraLanguageTranslation.exe"
+    : "AscendaraLanguageTranslation",
+  ludusavi: isWindows ? "ludusavi.exe" : "ludusavi",
+};
+
+// Dependency registry paths for Windows
+const DEPENDENCY_REGISTRY_PATHS = {
+  "dotNetFx40_Full_x86_x64.exe": {
+    key: "HKLM\\SOFTWARE\\Microsoft\\NET Framework Setup\\NDP\\v4\\Full",
+    value: "Install",
+    name: ".NET Framework 4.0",
+    checkType: "registry",
+  },
+  // The DirectX registry version exists on every modern Windows install, so check
+  // for the last legacy D3DX DLL from the June 2010 runtime that older games need.
+  "dxwebsetup.exe": {
+    filePath: `${process.env.SystemRoot || "C:\\Windows"}\\System32\\d3dx9_43.dll`,
+    name: "DirectX",
+    checkType: "file",
+  },
+  "oalinst.exe": {
+    filePath: "C:\\Windows\\System32\\OpenAL32.dll",
+    name: "OpenAL",
+    checkType: "file",
+  },
+  "VC_redist.x64.exe": {
+    key: "HKLM\\SOFTWARE\\Microsoft\\DevDiv\\VC\\Servicing\\14.0\\RuntimeMinimum",
+    value: "Install",
+    name: "Visual C++ Redistributable",
+    checkType: "registry",
+  },
+  "xnafx40_redist.msi": {
+    key: "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\XNA\\Framework\\v4.0",
+    value: "Installed",
+    name: "XNA Framework",
+    checkType: "registry",
+  },
+};
+
+// ============================================================================
+// APP VERSION IDENTIFIERS - DO NOT MODIFY MANUALLY
+// ============================================================================
+// These values are CRITICAL to app functionality and update system.
+// Modifying these values manually WILL cause:
+//   - Update system failures and broken version detection
+//   - Branch switching to malfunction
+//   - Potential data corruption or app crashes
+//   - Users stuck on wrong branches unable to update
+//
+// These values should ONLY be changed by:
+//   1. Automated build scripts for production releases
+//   2. Branch-specific build processes (experimental/public-testing)
+//
+// In development mode, appBranch MUST remain "live" to prevent conflicts.
+// ============================================================================
+
+const appBranch = "live";
+const appVersion = "12.2.5";
+const testingVersion = "";
+
+// Experimental and public-testing install the same "testing" build, so that
+// build runs as whichever of the two the user last switched to
+const TESTING_BRANCH_FILE = path.join(
+  path.dirname(TIMESTAMP_FILE),
+  "branch.ascendara.json"
+);
+
+function readTestingBranch() {
+  try {
+    const { branch } = JSON.parse(fs.readFileSync(TESTING_BRANCH_FILE, "utf8"));
+    return branch === "experimental" ? branch : "public-testing";
+  } catch {
+    return "public-testing";
+  }
+}
+
+const runningBranch = appBranch === "public-testing" ? readTestingBranch() : appBranch;
+
+// The GitHub prerelease each testing branch installs from. Experimental follows
+// "testing", which CI replaces on every development push; public-testing
+// follows "public-testing", a copy of a testing build made only when one is
+// promoted (.github/workflows/promote-testing.yml)
+const testingReleaseTag = branch =>
+  branch === "public-testing" ? "public-testing" : "testing";
+
+// The Ludex API every main-process request goes to. VITE_API_URL points
+// both this and the renderer (src/config/api.js) at another server.
+const API_URL = (process.env.VITE_API_URL || "https://api.ascendara.app").replace(
+  /\/+$/,
+  ""
+);
+
+module.exports = {
+  API_URL,
+  appVersion,
+  appBranch: runningBranch,
+  testingVersion,
+  TESTING_BRANCH_FILE,
+  testingReleaseTag,
+  isDev,
+  isWindows,
+  isPortable,
+  TIMESTAMP_FILE,
+  LANG_DIR,
+  appDirectory,
+  config,
+  APIKEY,
+  analyticsAPI,
+  steamWebApiKey,
+  steamGridDbApiKey,
+  imageKey,
+  clientId,
+  toolExecutables,
+  DEPENDENCY_REGISTRY_PATHS,
+  getPythonPath,
+  getHelperPath,
+  getLudusaviPath,
+  isLinux,
+  isMac,
+  unixConfigDir,
+  linuxConfigDir,
+  linuxCompatDataDir,
+  linuxRunnersDir,
+  linuxUmuDir,
+  linuxUmuBin,
+  linuxUmuDbPath,
+  STEAM_COMMON_PATHS,
+  STEAM_INSTALL_PATHS,
+};

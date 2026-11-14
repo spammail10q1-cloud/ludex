@@ -1,0 +1,1029 @@
+import { motion } from "framer-motion";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import AscendNavBar from "@/components/AscendNavBar";
+import SubscriptionPlanDialog from "@/components/SubscriptionPlanDialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  User,
+  Loader2,
+  ArrowRight,
+  Clock,
+  RefreshCw,
+  LockIcon,
+  ExternalLink,
+  CloudOff,
+  Hammer,
+  BadgeDollarSign,
+} from "lucide-react";
+import { lazy, Suspense, useState } from "react";
+// The overview is what Ascend opens on, so it ships with the page instead of
+// suspending on a placeholder first
+import HomeSection from "./ascend/HomeSection";
+import useAscendPage from "./ascend/useAscendPage";
+import SectionLoading from "./ascend/SectionLoading";
+import CommunityTabs, { COMMUNITY_SECTIONS } from "./ascend/CommunityTabs";
+import AscendWelcomeTour from "./ascend/AscendWelcomeTour";
+import VerifyEmailScreen from "./ascend/VerifyEmailScreen";
+import TwoFactorScreen from "./ascend/TwoFactorScreen";
+import { useAuth } from "@/context/AuthContext";
+import { useAscendNotificationCount } from "@/services/ascend/ascendNotificationBadgeService";
+import { useNewSecurityFeature } from "@/services/ascend/newFeatureBadgeService";
+import { useLoadHold } from "@/hooks/useLoadHold";
+const SearchSection = lazy(() => import("./ascend/SearchSection"));
+const FriendsSection = lazy(() => import("./ascend/FriendsSection"));
+const MessagesSection = lazy(() => import("./ascend/MessagesSection"));
+const NotificationsSection = lazy(() => import("./ascend/NotificationsSection"));
+const ReportsSection = lazy(() => import("./ascend/ReportsSection"));
+const CompanionSection = lazy(() => import("./ascend/CompanionSection"));
+const SettingsSection = lazy(() => import("./ascend/SettingsSection"));
+const CloudLibrarySection = lazy(() => import("./ascend/CloudLibrarySection"));
+const LeaderboardSection = lazy(() => import("./ascend/LeaderboardSection"));
+const UpcomingSection = lazy(() => import("./ascend/UpcomingSection"));
+const UserProfileSection = lazy(() => import("./ascend/UserProfileSection"));
+const CloudBackupsSection = lazy(() => import("./ascend/CloudBackupsSection"));
+const PremiumSection = lazy(() => import("./ascend/PremiumSection"));
+const DiscordSection = lazy(() => import("./ascend/DiscordSection"));
+const AuthSection = lazy(() => import("./ascend/AuthSection"));
+
+const Ascend = () => {
+  const ascendNotificationCount = useAscendNotificationCount();
+  const newSecurityFeature = useNewSecurityFeature();
+  const { twoFactorUser, completeTwoFactor } = useAuth();
+  // Dev screen trigger in Settings previews the verification screen once
+  const [previewVerification, setPreviewVerification] = useState(() => {
+    if (!localStorage.getItem("forceVerificationScreen")) return false;
+    localStorage.removeItem("forceVerificationScreen");
+    return true;
+  });
+  const {
+    checkingVersion,
+    t,
+    isOutdated,
+    authLoading,
+    user,
+    reloadUser,
+    handleResendVerification,
+    handleChangeUnverifiedEmail,
+    isResendingEmail,
+    showDisplayNamePrompt,
+    googleDisplayName,
+    setGoogleDisplayName,
+    isSubmitting,
+    handleGoogleDisplayNameSubmit,
+    ascendAccess,
+    deletedAccountWarning,
+    handleSubscribe,
+    handleLogout,
+    showPlanDialog,
+    setShowPlanDialog,
+    availablePlans,
+    handlePlanSelection,
+    userData,
+    activeSection,
+    setActiveSection,
+    friends,
+    incomingRequests,
+    localStats,
+    loadingLocalStats,
+    handleSearch,
+    searchQuery,
+    setSearchQuery,
+    isSearching,
+    searchResults,
+    handleViewProfile,
+    getRelationshipStatus,
+    handleSendRequest,
+    loadingFriends,
+    handleStartConversation,
+    handleRemoveFriend,
+    outgoingRequests,
+    loadingRequests,
+    handleAcceptRequest,
+    handleDenyRequest,
+    loadingConversations,
+    conversations,
+    handleSelectConversation,
+    selectedConversation,
+    setSelectedConversation,
+    loadingMessages,
+    messages,
+    messagesEndRef,
+    handleSendMessage,
+    messageInput,
+    setMessageInput,
+    sendingMessage,
+    loadingNotifications,
+    notifications,
+    isEditingProfile,
+    handleStartEditProfile,
+    editPhotoURL,
+    editDisplayName,
+    setEditPhotoURL,
+    setEditDisplayName,
+    editBio,
+    setEditBio,
+    editCountry,
+    setEditCountry,
+    editDiscord,
+    editEpicId,
+    setEditEpicId,
+    editGithub,
+    setEditGithub,
+    editSteam,
+    setEditSteam,
+    handleSaveProfile,
+    isSavingProfile,
+    handleCancelEditProfile,
+    webappConnectionCode,
+    handleGenerateWebappCode,
+    isGeneratingCode,
+    webappCodeExpiry,
+    webappQRCode,
+    handleCopyWebappCode,
+    webappCodeCopied,
+    handleCancelWebappConnection,
+    loadConnectedDevices,
+    loadingDevices,
+    connectedDevices,
+    handleDisconnectDevice,
+    disconnectingDevice,
+    updateData,
+    isDev,
+    devSubscriptionState,
+    setDevSubscriptionState,
+    handleViewInvoices,
+    handleManageSubscription,
+    showWelcomeTour,
+    setShowWelcomeTour,
+    showWelcomeTourPrompt,
+    answerWelcomeTourPrompt,
+    showDeleteDialog,
+    setShowDeleteDialog,
+    showDepartureDialog,
+    handleCancelDeparture,
+    handleAccountDeletion,
+    deletePassword,
+    setDeletePassword,
+    isDeletingAccount,
+    deleteHoldProgress,
+    handleDeleteMouseDown,
+    handleDeleteMouseUp,
+    deleteConfirmed,
+    setDeleteHoldProgress,
+    getFilteredLibraryGames,
+    cloudLibrary,
+    handleRestoreFromCloud,
+    isRestoringFromCloud,
+    isSyncingLibrary,
+    handleSyncLibrary,
+    librarySearchQuery,
+    setLibrarySearchQuery,
+    librarySortBy,
+    setLibrarySortBy,
+    loadingCloudLibrary,
+    expandedGame,
+    handleExpandGame,
+    isGameInstalledLocally,
+    loadingGameAchievements,
+    gameAchievements,
+    showDeleteConfirm,
+    setShowDeleteConfirm,
+    handleDeleteCloudGame,
+    deletingGame,
+    leaderboardData,
+    loadingLeaderboard,
+    loadLeaderboard,
+    upcomingChangelog,
+    loadingUpcoming,
+    loadUpcomingChangelog,
+    handleBackFromProfile,
+    loadingProfile,
+    profileError,
+    viewingProfile,
+    profileReturnSection,
+    reportDialogOpen,
+    setReportDialogOpen,
+    handleSubmitUserReport,
+    reportUserReason,
+    setReportUserReason,
+    reportUserDetails,
+    setReportUserDetails,
+    isReportingUser,
+    loadBackups,
+    backupFilterGame,
+    loadingBackups,
+    setBackupFilterGame,
+    backups,
+    deletingBackup,
+    handleDeleteBackup,
+    restoringBackup,
+    handleRestoreBackup,
+    handleDownloadBackup,
+    setUserStatus,
+    isLogin,
+    accountExistsError,
+    setAccountExistsError,
+    setIsLogin,
+    setDeletedAccountWarning,
+    linkWithPC,
+    setLinkWithPC,
+    startFreeTrial,
+    setStartFreeTrial,
+    handleGoogleSignIn,
+    isGoogleLoading,
+    handleSubmit,
+    formData,
+    handleInputChange,
+    showPassword,
+    setShowPassword,
+    showConfirmPassword,
+    setShowConfirmPassword,
+    toggleMode,
+    showEmailConfirmDialog,
+    setShowEmailConfirmDialog,
+    pendingSignupData,
+    setPendingSignupData,
+    handleConfirmSignup,
+  } = useAscendPage();
+  // Only the account itself is waited on: once it's known the hub opens
+  // straight away and each section shows placeholders until its data is in
+  useLoadHold(authLoading);
+  // Block access if app is outdated
+  if (checkingVersion) {
+    return (
+      <div className="flex min-h-[80vh] items-center justify-center">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="flex flex-col items-center gap-4"
+        >
+          <div className="relative">
+            <div className="h-16 w-16 rounded-full border-4 border-primary/20" />
+            <div className="absolute inset-0 h-16 w-16 animate-spin rounded-full border-4 border-transparent border-t-primary" />
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {t("ascend.checkingVersion") || "Checking version..."}
+          </p>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (isOutdated) {
+    return (
+      <div className="container mx-auto flex min-h-[80vh] max-w-md items-center px-6 py-8">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full space-y-6"
+        >
+          <div className="space-y-2 text-center">
+            <div className="bg-destructive/10 mx-auto flex h-16 w-16 items-center justify-center rounded-full">
+              <CloudOff className="text-destructive h-8 w-8" />
+            </div>
+            <h1 className="text-3xl font-bold">
+              {t("ascend.updateRequired.title") || "Update Required"}
+            </h1>
+            <p className="text-muted-foreground">
+              {t("ascend.updateRequired.description") ||
+                "Please update Ludex to the latest version to access Ascend features."}
+            </p>
+          </div>
+
+          <div className="rounded-xl border border-border/50 bg-card/50 p-4 text-center">
+            <p className="text-sm text-muted-foreground">
+              {t("ascend.updateRequired.info") ||
+                "Ascend requires the latest version of Ludex to ensure security and compatibility."}
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <Button
+              onClick={() => window.electron?.openURL("https://ascendara.app/")}
+              className="h-11 w-full text-secondary"
+            >
+              <ExternalLink className="mr-2 h-4 w-4" />
+              {t("ascend.updateRequired.download") || "Download Latest Version"}
+            </Button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // Check if Firebase credentials are available
+  const hasFirebaseCredentials = !!(
+    import.meta.env.VITE_FIREBASE_API_KEY &&
+    import.meta.env.VITE_FIREBASE_AUTH_DOMAIN &&
+    import.meta.env.VITE_FIREBASE_PROJECT_ID &&
+    import.meta.env.VITE_FIREBASE_APP_ID
+  );
+
+  if (!hasFirebaseCredentials) {
+    return (
+      <div className="container mx-auto flex min-h-[80vh] max-w-2xl items-center px-6 py-8">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full space-y-6 rounded-2xl border border-amber-500/20 bg-gradient-to-br from-amber-500/10 via-orange-500/5 to-background p-8 text-center"
+        >
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/20">
+            <Hammer className="h-8 w-8 text-amber-500" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-bold">{t("account.developmentMode.title")}</h2>
+            <p className="text-muted-foreground">
+              {t("account.developmentMode.description")}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border/50 bg-muted/50 p-4 text-left">
+            <p className="text-sm font-medium text-foreground">
+              {t("account.developmentMode.productionOnly")}
+            </p>
+            <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+              <li>• Account creation and authentication</li>
+              <li>• Friends and messaging</li>
+              <li>• Cloud library sync</li>
+              <li>• Leaderboards and achievements</li>
+              <li>• Community features</li>
+            </ul>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() =>
+              window.electron.openURL(
+                "https://github.com/Ascendara/ascendara#-configure-firebase"
+              )
+            }
+            className="gap-2"
+          >
+            <ExternalLink className="h-4 w-4" />
+            {t("account.developmentMode.learnMore")}
+          </Button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-[80vh] items-center justify-center">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center"
+        >
+          <Loader2 className="mx-auto h-8 w-8 animate-spin text-primary" />
+          <p className="mt-4 text-sm text-muted-foreground">
+            {t("account.loading") || "Loading..."}
+          </p>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // Signed in, but this sign-in still needs the emailed two-step code
+  if (twoFactorUser) {
+    return (
+      <TwoFactorScreen
+        t={t}
+        email={twoFactorUser.email}
+        onVerified={completeTwoFactor}
+        onSignOut={handleLogout}
+      />
+    );
+  }
+
+  // Email verification required screen (only for email/password users)
+  if (
+    previewVerification ||
+    (user && !user.emailVerified && user.providerData?.[0]?.providerId === "password")
+  ) {
+    return (
+      <VerifyEmailScreen
+        t={t}
+        email={user?.email || "preview@example.com"}
+        preview={previewVerification}
+        reloadUser={reloadUser}
+        onResend={handleResendVerification}
+        onChangeEmail={handleChangeUnverifiedEmail}
+        isResending={isResendingEmail}
+        onSignOut={handleLogout}
+        onExitPreview={() => setPreviewVerification(false)}
+      />
+    );
+  }
+
+  // If user is logged in, show social hub
+  if (user) {
+    // Display name prompt for new Google users - show FIRST before any access checks
+    if (showDisplayNamePrompt) {
+      return (
+        <div className="container mx-auto flex min-h-[80vh] max-w-md items-center px-6 py-8">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full space-y-6"
+          >
+            <div className="space-y-2 text-center">
+              <h1 className="text-3xl font-bold">{t("account.almostThere")}</h1>
+              <p className="text-muted-foreground">{t("account.chooseDisplayName")}</p>
+            </div>
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="googleDisplayName">{t("account.form.displayName")}</Label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="googleDisplayName"
+                    type="text"
+                    placeholder={t("account.form.displayNamePlaceholder")}
+                    value={googleDisplayName}
+                    onChange={e => setGoogleDisplayName(e.target.value)}
+                    className="h-11 pl-10"
+                    disabled={isSubmitting}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t("account.displayNameHint")}
+                </p>
+              </div>
+
+              <Button
+                onClick={handleGoogleDisplayNameSubmit}
+                className="h-11 w-full text-secondary"
+                disabled={isSubmitting || googleDisplayName.trim().length < 4}
+              >
+                {isSubmitting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <ArrowRight className="mr-2 h-4 w-4" />
+                )}
+                {t("account.form.continue")}
+              </Button>
+            </div>
+          </motion.div>
+        </div>
+      );
+    }
+
+    // Show access denied if trial expired/blocked and not subscribed
+    if (ascendAccess.verified && !ascendAccess.hasAccess) {
+      const isTrialBlocked = ascendAccess.trialBlocked;
+      const isNoTrial = ascendAccess.noTrial;
+
+      // Special screen for users blocked from free trial
+      if (isNoTrial) {
+        return (
+          <>
+            <div className="fixed inset-0 flex items-center justify-center bg-background/95 backdrop-blur-sm">
+              <div className="mx-auto max-w-md space-y-6 p-8 text-center">
+                <div className="bg-destructive/10 mx-auto flex h-20 w-20 items-center justify-center rounded-full">
+                  <LockIcon className="text-destructive h-10 w-10" />
+                </div>
+                <h1 className="text-2xl font-bold">{t("ascend.access.noTrialTitle")}</h1>
+                <p className="text-muted-foreground">
+                  {t("ascend.access.noTrialMessage")}
+                </p>
+                {ascendAccess.noTrialReason && (
+                  <div className="rounded-lg bg-muted/50 p-4">
+                    <p className="text-sm font-medium text-muted-foreground">
+                      {t("ascend.access.reason")}:
+                    </p>
+                    <p className="mt-1 text-sm">{ascendAccess.noTrialReason}</p>
+                  </div>
+                )}
+                {!deletedAccountWarning && (
+                  <Button onClick={handleSubscribe} className="w-full text-secondary">
+                    <BadgeDollarSign className="mr-2 h-4 w-4" />
+                    {t("ascend.settings.subscribe")}
+                  </Button>
+                )}
+                {deletedAccountWarning && (
+                  <div className="bg-destructive/10 border-destructive/30 text-destructive rounded-lg border p-4 text-sm">
+                    {t("account.errors.cannotSubscribeDeleted") ||
+                      "Cannot subscribe - account deleted"}
+                  </div>
+                )}
+                <button
+                  onClick={handleLogout}
+                  className="text-sm text-muted-foreground hover:text-foreground"
+                >
+                  {t("account.signOut")}
+                </button>
+              </div>
+            </div>
+
+            {/* Subscription Plan Selection Dialog */}
+            <SubscriptionPlanDialog
+              open={showPlanDialog}
+              onOpenChange={setShowPlanDialog}
+              availablePlans={availablePlans}
+              onPlanSelection={handlePlanSelection}
+              t={t}
+            />
+          </>
+        );
+      }
+
+      return (
+        <>
+          <div className="fixed inset-0 flex items-center justify-center bg-background/95 backdrop-blur-sm">
+            <div className="mx-auto max-w-md space-y-6 p-8 text-center">
+              <div className="bg-destructive/10 mx-auto flex h-20 w-20 items-center justify-center rounded-full">
+                <Clock className="text-destructive h-10 w-10" />
+              </div>
+              <h1 className="text-2xl font-bold">
+                {isTrialBlocked
+                  ? t("ascend.access.trialBlocked")
+                  : t("ascend.access.subscriptionExpired")}
+              </h1>
+              <p className="text-muted-foreground">
+                {isTrialBlocked
+                  ? t("ascend.access.trialBlockedMessage")
+                  : userData?.ascendSubscription?.lifetime
+                    ? t("ascend.access.subscriptionExpiredMessage")
+                    : userData?.ascendSubscription?.expiresAt
+                      ? t("ascend.access.subscriptionExpiredOn", {
+                          date: new Date(
+                            userData.ascendSubscription.expiresAt.toDate()
+                          ).toLocaleDateString(undefined, {
+                            year: "numeric",
+                            month: "long",
+                            day: "numeric",
+                          }),
+                        })
+                      : t("ascend.access.subscriptionExpiredMessage")}
+              </p>
+              {!deletedAccountWarning && (
+                <div className="space-y-3">
+                  <Button onClick={handleSubscribe} className="w-full text-secondary">
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    {t("ascend.access.renewSubscription")}
+                  </Button>
+                </div>
+              )}
+              {deletedAccountWarning && (
+                <div className="bg-destructive/10 border-destructive/30 text-destructive rounded-lg border p-4 text-sm">
+                  {t("account.errors.cannotSubscribeDeleted") ||
+                    "Cannot subscribe - account deleted"}
+                </div>
+              )}
+              <button
+                onClick={handleLogout}
+                className="text-sm text-muted-foreground hover:text-foreground"
+              >
+                {t("account.signOut")}
+              </button>
+            </div>
+          </div>
+
+          {/* Subscription Plan Selection Dialog */}
+          <SubscriptionPlanDialog
+            open={showPlanDialog}
+            onOpenChange={setShowPlanDialog}
+            availablePlans={availablePlans}
+            onPlanSelection={handlePlanSelection}
+            t={t}
+          />
+        </>
+      );
+    }
+
+    // Format playtime for display
+    const formatPlaytimeDetailed = seconds => {
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      if (hours === 0) return `${minutes}m`;
+      return `${hours}h ${minutes}m`;
+    };
+
+    const isCommunitySection = COMMUNITY_SECTIONS.includes(activeSection);
+
+    // Render content based on active section
+    const renderContent = () => {
+      switch (activeSection) {
+        case "home":
+          return (
+            <HomeSection
+              user={user}
+              t={t}
+              setActiveSection={setActiveSection}
+              ascendAccess={ascendAccess}
+              friends={friends}
+              incomingRequests={incomingRequests}
+              conversations={conversations}
+              localStats={localStats}
+              loadingLocalStats={loadingLocalStats}
+              loadingFriends={loadingFriends}
+              loadingConversations={loadingConversations}
+              formatPlaytimeDetailed={formatPlaytimeDetailed}
+              cloudLibrary={cloudLibrary}
+              loadingCloudLibrary={loadingCloudLibrary}
+              handleSyncLibrary={handleSyncLibrary}
+              isSyncingLibrary={isSyncingLibrary}
+              handleRestoreFromCloud={handleRestoreFromCloud}
+              isRestoringFromCloud={isRestoringFromCloud}
+              backups={backups}
+              loadingBackups={loadingBackups}
+            />
+          );
+
+        case "search":
+          return (
+            <SearchSection
+              t={t}
+              handleSearch={handleSearch}
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              isSearching={isSearching}
+              searchResults={searchResults}
+              handleViewProfile={handleViewProfile}
+              getRelationshipStatus={getRelationshipStatus}
+              handleSendRequest={handleSendRequest}
+            />
+          );
+
+        case "friends":
+          return (
+            <FriendsSection
+              friends={friends}
+              t={t}
+              setActiveSection={setActiveSection}
+              loadingFriends={loadingFriends}
+              handleViewProfile={handleViewProfile}
+              handleStartConversation={handleStartConversation}
+              handleRemoveFriend={handleRemoveFriend}
+              incomingRequests={incomingRequests}
+              outgoingRequests={outgoingRequests}
+              loadingRequests={loadingRequests}
+              handleAcceptRequest={handleAcceptRequest}
+              handleDenyRequest={handleDenyRequest}
+            />
+          );
+
+        case "messages":
+          return (
+            <MessagesSection
+              t={t}
+              loadingConversations={loadingConversations}
+              conversations={conversations}
+              handleSelectConversation={handleSelectConversation}
+              selectedConversation={selectedConversation}
+              user={user}
+              setActiveSection={setActiveSection}
+              setSelectedConversation={setSelectedConversation}
+              handleViewProfile={handleViewProfile}
+              loadingMessages={loadingMessages}
+              messages={messages}
+              messagesEndRef={messagesEndRef}
+              handleSendMessage={handleSendMessage}
+              messageInput={messageInput}
+              setMessageInput={setMessageInput}
+              sendingMessage={sendingMessage}
+            />
+          );
+
+        case "notifications":
+          return (
+            <NotificationsSection
+              t={t}
+              loadingNotifications={loadingNotifications}
+              notifications={notifications}
+            />
+          );
+
+        case "reports":
+          return <ReportsSection t={t} />;
+
+        case "companion":
+          return (
+            <CompanionSection
+              t={t}
+              webappConnectionCode={webappConnectionCode}
+              handleGenerateWebappCode={handleGenerateWebappCode}
+              isGeneratingCode={isGeneratingCode}
+              webappCodeExpiry={webappCodeExpiry}
+              webappQRCode={webappQRCode}
+              handleCopyWebappCode={handleCopyWebappCode}
+              webappCodeCopied={webappCodeCopied}
+              handleCancelWebappConnection={handleCancelWebappConnection}
+              loadConnectedDevices={loadConnectedDevices}
+              loadingDevices={loadingDevices}
+              connectedDevices={connectedDevices}
+              handleDisconnectDevice={handleDisconnectDevice}
+              disconnectingDevice={disconnectingDevice}
+            />
+          );
+
+        case "settings":
+          return (
+            <SettingsSection
+              t={t}
+              isEditingProfile={isEditingProfile}
+              handleStartEditProfile={handleStartEditProfile}
+              editPhotoURL={editPhotoURL}
+              editDisplayName={editDisplayName}
+              user={user}
+              setEditPhotoURL={setEditPhotoURL}
+              setEditDisplayName={setEditDisplayName}
+              editBio={editBio}
+              setEditBio={setEditBio}
+              editCountry={editCountry}
+              setEditCountry={setEditCountry}
+              editDiscord={editDiscord}
+              editEpicId={editEpicId}
+              setEditEpicId={setEditEpicId}
+              editGithub={editGithub}
+              setEditGithub={setEditGithub}
+              editSteam={editSteam}
+              setEditSteam={setEditSteam}
+              handleSaveProfile={handleSaveProfile}
+              isSavingProfile={isSavingProfile}
+              handleCancelEditProfile={handleCancelEditProfile}
+              userData={userData}
+              ascendAccess={ascendAccess}
+              updateData={updateData}
+              isDev={isDev}
+              devSubscriptionState={devSubscriptionState}
+              setDevSubscriptionState={setDevSubscriptionState}
+              handleViewInvoices={handleViewInvoices}
+              handleManageSubscription={handleManageSubscription}
+              deletedAccountWarning={deletedAccountWarning}
+              handleSubscribe={handleSubscribe}
+              handleLogout={handleLogout}
+              showDeleteDialog={showDeleteDialog}
+              setShowDeleteDialog={setShowDeleteDialog}
+              showDepartureDialog={showDepartureDialog}
+              handleCancelDeparture={handleCancelDeparture}
+              handleAccountDeletion={handleAccountDeletion}
+              deletePassword={deletePassword}
+              setDeletePassword={setDeletePassword}
+              isDeletingAccount={isDeletingAccount}
+              deleteHoldProgress={deleteHoldProgress}
+              handleDeleteMouseDown={handleDeleteMouseDown}
+              handleDeleteMouseUp={handleDeleteMouseUp}
+              deleteConfirmed={deleteConfirmed}
+              setDeleteHoldProgress={setDeleteHoldProgress}
+            />
+          );
+
+        case "cloudlibrary":
+          return (
+            <CloudLibrarySection
+              getFilteredLibraryGames={getFilteredLibraryGames}
+              cloudLibrary={cloudLibrary}
+              t={t}
+              handleRestoreFromCloud={handleRestoreFromCloud}
+              isRestoringFromCloud={isRestoringFromCloud}
+              isSyncingLibrary={isSyncingLibrary}
+              handleSyncLibrary={handleSyncLibrary}
+              formatPlaytimeDetailed={formatPlaytimeDetailed}
+              librarySearchQuery={librarySearchQuery}
+              setLibrarySearchQuery={setLibrarySearchQuery}
+              librarySortBy={librarySortBy}
+              setLibrarySortBy={setLibrarySortBy}
+              loadingCloudLibrary={loadingCloudLibrary}
+              expandedGame={expandedGame}
+              handleExpandGame={handleExpandGame}
+              isGameInstalledLocally={isGameInstalledLocally}
+              loadingGameAchievements={loadingGameAchievements}
+              gameAchievements={gameAchievements}
+              showDeleteConfirm={showDeleteConfirm}
+              setShowDeleteConfirm={setShowDeleteConfirm}
+              handleDeleteCloudGame={handleDeleteCloudGame}
+              deletingGame={deletingGame}
+            />
+          );
+
+        case "leaderboard":
+          // Load leaderboard data when section is accessed
+          return (
+            <LeaderboardSection
+              leaderboardData={leaderboardData}
+              loadingLeaderboard={loadingLeaderboard}
+              loadLeaderboard={loadLeaderboard}
+              t={t}
+              handleViewProfile={handleViewProfile}
+              setActiveSection={setActiveSection}
+            />
+          );
+
+        case "upcoming":
+          // Load upcoming changelog when section is accessed
+          return (
+            <UpcomingSection
+              upcomingChangelog={upcomingChangelog}
+              loadingUpcoming={loadingUpcoming}
+              loadUpcomingChangelog={loadUpcomingChangelog}
+              t={t}
+            />
+          );
+
+        case "userProfile":
+          return (
+            <UserProfileSection
+              handleBackFromProfile={handleBackFromProfile}
+              returnSection={profileReturnSection}
+              t={t}
+              loadingProfile={loadingProfile}
+              profileError={profileError}
+              viewingProfile={viewingProfile}
+              getRelationshipStatus={getRelationshipStatus}
+              handleStartConversation={handleStartConversation}
+              handleSendRequest={handleSendRequest}
+              reportDialogOpen={reportDialogOpen}
+              setReportDialogOpen={setReportDialogOpen}
+              handleSubmitUserReport={handleSubmitUserReport}
+              reportUserReason={reportUserReason}
+              setReportUserReason={setReportUserReason}
+              reportUserDetails={reportUserDetails}
+              setReportUserDetails={setReportUserDetails}
+              isReportingUser={isReportingUser}
+            />
+          );
+
+        case "cloudbackups":
+          return (
+            <CloudBackupsSection
+              t={t}
+              ascendAccess={ascendAccess}
+              setActiveSection={setActiveSection}
+              loadBackups={loadBackups}
+              backupFilterGame={backupFilterGame}
+              loadingBackups={loadingBackups}
+              setBackupFilterGame={setBackupFilterGame}
+              backups={backups}
+              deletingBackup={deletingBackup}
+              handleDeleteBackup={handleDeleteBackup}
+              restoringBackup={restoringBackup}
+              handleRestoreBackup={handleRestoreBackup}
+              handleDownloadBackup={handleDownloadBackup}
+            />
+          );
+
+        case "premium":
+          return <PremiumSection t={t} setActiveSection={setActiveSection} />;
+
+        case "discord":
+          return (
+            <DiscordSection
+              t={t}
+              user={user}
+              userData={userData}
+              ascendAccess={ascendAccess}
+              handleSubscribe={handleSubscribe}
+            />
+          );
+
+        default:
+          return null;
+      }
+    };
+
+    return (
+      <>
+        <div className="fixed inset-0 flex flex-col bg-background">
+          <AscendNavBar
+            activeSection={activeSection}
+            onSectionChange={setActiveSection}
+            user={user}
+            userData={userData}
+            onStatusChange={setUserStatus}
+            ascendAccess={ascendAccess}
+            onSubscribe={handleSubscribe}
+            badges={{
+              requests: incomingRequests.length,
+              messages: conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0),
+              notifications: ascendNotificationCount,
+              settings: newSecurityFeature ? 1 : 0,
+            }}
+          />
+
+          {/* Main content */}
+          <div
+            className={`min-h-0 min-w-0 flex-1 px-4 pt-6 sm:px-6 lg:px-10 lg:pt-8 ${activeSection === "messages" ? "flex flex-col overflow-hidden pb-32" : "overflow-y-auto pb-6 lg:pb-8"}`}
+          >
+            {isCommunitySection && (
+              <div className="mx-auto w-full max-w-6xl">
+                <CommunityTabs
+                  t={t}
+                  activeSection={activeSection}
+                  setActiveSection={setActiveSection}
+                  requestCount={incomingRequests.length}
+                />
+              </div>
+            )}
+            <motion.div
+              key={activeSection}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2 }}
+              className={`mx-auto w-full max-w-6xl ${activeSection === "messages" ? "min-h-0 flex-1" : ""}`}
+            >
+              {
+                <Suspense fallback={<SectionLoading section={activeSection} />}>
+                  {renderContent()}
+                </Suspense>
+              }
+            </motion.div>
+          </div>
+        </div>
+
+        {/* Subscription Plan Selection Dialog */}
+        <SubscriptionPlanDialog
+          isLifetimeUpgrade={
+            ascendAccess.isSubscribed && !userData?.ascendSubscription?.lifetime
+          }
+          open={showPlanDialog}
+          onOpenChange={setShowPlanDialog}
+          availablePlans={availablePlans}
+          onPlanSelection={handlePlanSelection}
+          t={t}
+        />
+
+        <AlertDialog
+          open={showWelcomeTourPrompt}
+          onOpenChange={open => !open && answerWelcomeTourPrompt(false)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("ascendTour.prompt.title")}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t("ascendTour.prompt.content")}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => answerWelcomeTourPrompt(false)}>
+                {t("ascendTour.prompt.decline")}
+              </AlertDialogCancel>
+              <AlertDialogAction
+                className="text-secondary"
+                onClick={() => answerWelcomeTourPrompt(true)}
+              >
+                {t("ascendTour.prompt.accept")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {showWelcomeTour && (
+          <AscendWelcomeTour
+            t={t}
+            setActiveSection={setActiveSection}
+            onClose={() => setShowWelcomeTour(false)}
+          />
+        )}
+      </>
+    );
+  }
+
+  // Sign up / Login form - open two-column layout
+  return (
+    <Suspense fallback={<SectionLoading />}>
+      <AuthSection
+        isLogin={isLogin}
+        t={t}
+        accountExistsError={accountExistsError}
+        setAccountExistsError={setAccountExistsError}
+        setIsLogin={setIsLogin}
+        deletedAccountWarning={deletedAccountWarning}
+        setDeletedAccountWarning={setDeletedAccountWarning}
+        linkWithPC={linkWithPC}
+        setLinkWithPC={setLinkWithPC}
+        isSubmitting={isSubmitting}
+        startFreeTrial={startFreeTrial}
+        setStartFreeTrial={setStartFreeTrial}
+        handleGoogleSignIn={handleGoogleSignIn}
+        isGoogleLoading={isGoogleLoading}
+        handleSubmit={handleSubmit}
+        formData={formData}
+        handleInputChange={handleInputChange}
+        showPassword={showPassword}
+        setShowPassword={setShowPassword}
+        showConfirmPassword={showConfirmPassword}
+        setShowConfirmPassword={setShowConfirmPassword}
+        toggleMode={toggleMode}
+        showEmailConfirmDialog={showEmailConfirmDialog}
+        setShowEmailConfirmDialog={setShowEmailConfirmDialog}
+        pendingSignupData={pendingSignupData}
+        setPendingSignupData={setPendingSignupData}
+        handleConfirmSignup={handleConfirmSignup}
+      />
+    </Suspense>
+  );
+};
+
+export default Ascend;

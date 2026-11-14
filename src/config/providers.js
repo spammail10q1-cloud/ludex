@@ -1,0 +1,107 @@
+/**
+ * Centralized provider configuration.
+ *
+ * Single source of truth for download provider keys, categorization,
+ * display names, and known domains. Import from here instead of
+ * re-declaring provider lists in individual files.
+ */
+
+// Providers that support seamless (in-app) downloads.
+export const SEAMLESS_PROVIDERS = ["gofile", "pixeldrain"];
+
+// Providers whose page Ludex clicks through in a hidden window (Magic Link),
+// so they download without the user opening a browser.
+export const MAGIC_LINK_PROVIDERS = ["buzzheavier", "megadb"];
+
+export function isMagicLink(provider, url) {
+  return (
+    MAGIC_LINK_PROVIDERS.includes(String(provider || "").toLowerCase()) ||
+    /bzzhr\.(?:to|co)|buzzheavier|fafda\.to|fuckingfast\.(?:net|co)|megadb\.(?:net|xyz)/i.test(
+      url || ""
+    )
+  );
+}
+
+// Providers whose page the user clicks through in Ludex's own window, with
+// ads blocked; the window closes once the file link is caught
+export const APP_WINDOW_PROVIDERS = ["fileditch", "fileditchfiles"];
+
+export function opensInAppWindow(provider, url) {
+  return (
+    APP_WINDOW_PROVIDERS.includes(String(provider || "").toLowerCase()) ||
+    /fileditch/i.test(url || "")
+  );
+}
+
+// Providers whose downloads are considered "verified" / trusted.
+export const VERIFIED_PROVIDERS = ["megadb", "gofile", "buzzheavier", "pixeldrain"];
+
+// Human-readable display names for providers (keyed by provider id).
+export const PROVIDER_DISPLAY_NAMES = {
+  "1fichier": "1Fichier",
+  megadb: "MegaDB",
+  gofile: "GoFile",
+  buzzheavier: "Buzzheavier",
+  pixeldrain: "PixelDrain",
+  datanodes: "DataNodes",
+  qiwi: "Qiwi",
+  vikingfile: "VikingFile",
+  torrent: "Torrent",
+  fileditch: "FileDitch",
+  fileditchfiles: "FileDitch",
+};
+
+// Known domains for each provider. Used for URL classification
+// (e.g. scrapers, parsers). Update this list when a provider
+// changes or adds a domain.
+export const PROVIDER_DOMAINS = {
+  gofile: ["gofile.io"],
+  buzzheavier: [
+    "buzzheavier.com",
+    "bzzhr.co",
+    "bzzhr.to",
+    "ts.bzzhr.to",
+    "fafda.to",
+    "fuckingfast.net",
+    "fuckingfast.co",
+  ],
+  pixeldrain: ["pixeldrain.com"],
+  "1fichier": ["1fichier.com"],
+  megadb: ["megadb.net"],
+  datanodes: ["datanodes.to"],
+  qiwi: ["qiwi.gg"],
+  vikingfile: ["vikingfile.com"],
+  fileditch: ["fileditchfiles.me", "itsfileditchfiles.st", "fileditch.com"],
+  fileditchfiles: ["fileditchfiles.me", "itsfileditchfiles.st"],
+};
+
+/**
+ * Given a URL string, return the provider id whose domain list matches,
+ * or null if no provider matches.
+ */
+export function getProviderFromUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  const lowered = url.toLowerCase();
+  for (const [provider, domains] of Object.entries(PROVIDER_DOMAINS)) {
+    if (domains.some(d => lowered.includes(d))) return provider;
+  }
+  return null;
+}
+
+/**
+ * Return the display name for a provider id, falling back to the id itself.
+ */
+export function getProviderDisplayName(provider) {
+  if (!provider) return "";
+  return PROVIDER_DISPLAY_NAMES[provider.toLowerCase()] || provider;
+}
+
+/**
+ * Check if the given download_links object has any seamless provider.
+ */
+export function hasSeamlessOption(downloadLinks) {
+  if (!downloadLinks || typeof downloadLinks !== "object") return false;
+  return Object.keys(downloadLinks).some(host =>
+    SEAMLESS_PROVIDERS.includes(host.toLowerCase())
+  );
+}

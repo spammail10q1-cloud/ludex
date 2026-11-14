@@ -1,0 +1,1580 @@
+import { useLibraryConflicts } from "@/hooks/useLibraryConflicts";
+import { useLanguage } from "@/context/LanguageContext";
+import { useSettings } from "@/context/SettingsContext";
+import { useAuth } from "@/context/AuthContext";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  getDownloadQueue,
+  processNextInQueue,
+  hasActiveDownloads,
+} from "@/services/downloads/downloadQueueService";
+import { toast } from "sonner";
+import * as debrid from "@/services/downloads/debridService";
+import { canDownloadTorrentLinks } from "@/services/downloads/torrentCapability";
+import { freedByPause } from "@/services/downloads/downloadState";
+import * as torboxService from "@/services/downloads/torboxService";
+import {
+  SEAMLESS_PROVIDERS,
+  MAGIC_LINK_PROVIDERS,
+  isMagicLink,
+} from "@/config/providers";
+import { sanitizeText } from "@/lib/utils";
+import recentGamesService from "@/services/library/recentGamesService";
+import gameService from "@/services/games/gameService";
+import { useHideCursorOnGamepad } from "./useHideCursorOnGamepad";
+import { getControllerButtons } from "./controller";
+import { createFuzzyMatcher } from "./utils";
+import { useDebouncedValue } from "./useDebouncedValue";
+import { useControllerInput } from "./useControllerInput";
+import { playBigPictureSound, setBigPictureSoundsEnabled } from "./bigPictureSounds";
+import { sidebarItems } from "./SidebarMenu";
+import { pageLinks } from "./PageHeader";
+
+function useBigPicturePage() {
+  useHideCursorOnGamepad();
+  const { t } = useLanguage();
+  const { settings, updateSetting } = useSettings();
+  const { isAuthenticated, user } = useAuth();
+  const surfaceNavigation = useRef(null);
+  const surfaceInputLock = useRef(false);
+  const pageFocusRequest = useRef(false);
+  const controllerType = settings.controllerType || "xbox";
+  const buttons = getControllerButtons(controllerType);
+  const [assetSearchOpen, setAssetSearchOpen] = useState(false);
+  const [assetSearchGame, setAssetSearchGame] = useState(null);
+  const soundsEnabled = settings.bigPictureSounds !== false;
+  useEffect(() => {
+    setBigPictureSoundsEnabled(soundsEnabled);
+  }, [soundsEnabled]);
+  // Chime on the way in, after settings have settled so a saved "off" holds
+  useEffect(() => {
+    const timer = setTimeout(() => playBigPictureSound("enter"), 350);
+    return () => {
+      clearTimeout(timer);
+      setBigPictureSoundsEnabled(false);
+    };
+  }, []);
+  // Enter full-screen on mount, quit on unmount.
+  // Fullscreen is driven through the "set-fullscreen" IPC call (which sets
+  // the native BrowserWindow state directly) rather than relying solely on
+  // the DOM Fullscreen API. The DOM API requires a user gesture and can
+  // silently fail (e.g. when triggered from a gamepad poll loop or on
+  // unmount), leaving the window stuck in native fullscreen after leaving
+  // Big Picture. Calling window.electron.setFullscreen explicitly guarantees
+  // the window state is always synced on the way in and out.
+  useEffect(() => {
+    const useNativeFullscreen = typeof window.electron?.setFullscreen === "function";
+    const enterFullScreen = async () => {
+      try {
+        if (useNativeFullscreen) {
+          await window.electron.setFullscreen(true);
+        } else if (!document.fullscreenElement) {
+          await document.documentElement.requestFullscreen();
+        }
+      } catch (err) {
+        // Silently ignore fullscreen errors (browser requires user gesture)
+      }
+    };
+
+    enterFullScreen();
+
+    // Prevent Escape key from exiting fullscreen
+    const preventEscapeFullscreen = e => {
+      if (e.bigPictureIndexEscape) return;
+      if (e.key === "Escape" && document.fullscreenElement) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    document.addEventListener("keydown", preventEscapeFullscreen, { capture: true });
+
+    // Quit full-screen when leaving Big Picture
+    return () => {
+      document.removeEventListener("keydown", preventEscapeFullscreen, { capture: true });
+      if (useNativeFullscreen) {
+        window.electron
+          .setFullscreen(false)
+          .catch(err => console.error("Error exiting native fullscreen:", err));
+      } else if (document.fullscreenElement) {
+        document
+          .exitFullscreen()
+          .catch(err => console.error("Error exiting fullscreen:", err));
+      }
+    };
+  }, []);
+
+  // Welcome animation effect
+  useEffect(() => {
+    const reducedMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)"
+    )?.matches;
+    const timer = setTimeout(
+      () => {
+        setShowWelcomeAnimation(false);
+      },
+      reducedMotion ? 300 : 2700
+    );
+
+    return () => clearTimeout(timer);
+  }, []);
+  const [libraryRecords, setLibraryRecords] = useState([]);
+  const library = useLibraryConflicts(libraryRecords, () =>
+    toast.error("Unable to save your library choice. Please try again.")
+  );
+  const allGames = library.games;
+  const libraryConflict = library.conflict;
+  const resolveLibraryConflict = library.resolve;
+  const [carouselGames, setCarouselGames] = useState([]);
+  const [storeGames, setStoreGames] = useState([]);
+  const [storeRevision, setStoreRevision] = useState(0);
+  const [storeLoading, setStoreLoading] = useState(false);
+  const [selectedStoreGame, setSelectedStoreGame] = useState(null);
+  const [view, setView] = useState("carousel");
+  const [previousView, setPreviousView] = useState("carousel");
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [showWelcomeAnimation, setShowWelcomeAnimation] = useState(true);
+  const [showExitDialog, setShowExitDialog] = useState(false);
+  const [showExitBigPictureDialog, setShowExitBigPictureDialog] = useState(false);
+  const [showControllerSettings, setShowControllerSettings] = useState(false);
+  const [downloadingGame, setDownloadingGame] = useState(null);
+  const [selectedInstalledGame, setSelectedInstalledGame] = useState(null);
+  const [installedGameView, setInstalledGameView] = useState(false);
+
+  // New state for active downloads
+  const [downloadingGames, setDownloadingGames] = useState([]);
+  const [torboxStates, setTorboxStates] = useState({}); // webdownloadId -> state
+  const [downloadsIndex, setDownloadsIndex] = useState(0);
+  const [stoppingDownloads, setStoppingDownloads] = useState(new Set());
+  const [resumingDownloads, setResumingDownloads] = useState(new Set());
+  const [showKillDialog, setShowKillDialog] = useState(false);
+  const [gameToKill, setGameToKill] = useState(null);
+  const [showProviderDialog, setShowProviderDialog] = useState(false);
+  const [providerDialogGame, setProviderDialogGame] = useState(null);
+  const [providerDialogProviders, setProviderDialogProviders] = useState([]);
+  const providerDialogJustClosed = useRef(false);
+
+  // Queue management state
+  const [queuedDownloads, setQueuedDownloads] = useState([]);
+  const [pendingDownloadData, setPendingDownloadData] = useState(null);
+  const [showQueuePrompt, setShowQueuePrompt] = useState(false);
+  const [draggedQueueIndex, setDraggedQueueIndex] = useState(null);
+  const [dragOverQueueIndex, setDragOverQueueIndex] = useState(null);
+
+  // Ref to track previous active download count for queue processing
+  const prevActiveCountRef = useRef(0);
+
+  // Ref to track previous downloading games for library refresh on completion
+  const prevDownloadingGamesRef = useRef([]);
+
+  // Fuzzy matcher instance for search
+  const fuzzyMatch = useMemo(() => createFuzzyMatcher(), []);
+
+  const [storeSearchQuery, setStoreSearchQuery] = useState("");
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const [isSearchBarSelected, setIsSearchBarSelected] = useState(false);
+  const [keyboardLayout, setKeyboardLayout] = useState("qwerty");
+
+  // Enhanced filtering and sorting states
+  const [selectedSort, setSelectedSort] = useState("weight");
+  const [showDLC, setShowDLC] = useState(false);
+  const [showOnline, setShowOnline] = useState(false);
+
+  const [carouselIndex, setCarouselIndex] = useState(0);
+  const [libraryIndex, setLibraryIndex] = useState(0);
+  const [storeIndex, setStoreIndex] = useState(0);
+  const [menuIndex, setMenuIndex] = useState(0);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [homeSidebarIndex, setHomeSidebarIndex] = useState(-1); // -1 means not focused on sidebar
+  const [isHomeSidebarActive, setIsHomeSidebarActive] = useState(false);
+
+  // Context menu state - shows after 1 second of selection
+  const [contextMenuGame, setContextMenuGame] = useState(null);
+  const [contextMenuPosition, setContextMenuPosition] = useState(null);
+  const contextMenuTimerRef = useRef(null);
+
+  const [displayedCount, setDisplayedCount] = useState(30);
+  const loaderRef = useRef(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const GAMES_PER_LOAD = 30;
+
+  const navigate = useNavigate();
+  const GRID_COLS = 6;
+
+  // --- DOWNLOAD POLLING ---
+  useEffect(() => {
+    let disposed = false;
+    let timeoutId;
+    let active = false;
+    const fetchDownloadingGames = async () => {
+      try {
+        const games = await window.electron.getGames();
+        const downloading = games.filter(game => {
+          const { downloadingData } = game;
+          return (
+            downloadingData &&
+            (downloadingData.downloading ||
+              downloadingData.extracting ||
+              downloadingData.updating ||
+              downloadingData.verifying ||
+              downloadingData.stopped ||
+              (downloadingData.verifyError && downloadingData.verifyError.length > 0) ||
+              downloadingData.error)
+          );
+        });
+        active = downloading.some(
+          ({ downloadingData }) =>
+            downloadingData.downloading ||
+            downloadingData.extracting ||
+            downloadingData.updating ||
+            downloadingData.verifying
+        );
+        // Keep the same array while nothing is listed so the idle view does not re-render
+        setDownloadingGames(prev =>
+          prev.length === 0 && downloading.length === 0 ? prev : downloading
+        );
+      } catch (error) {
+        console.error("Error polling downloads:", error);
+      }
+    };
+
+    // Reading games touches every game folder: poll every second only while
+    // something is in progress
+    const poll = async () => {
+      await fetchDownloadingGames();
+      if (disposed) return;
+      timeoutId = setTimeout(poll, active ? 1000 : 5000);
+    };
+    poll();
+    return () => {
+      disposed = true;
+      clearTimeout(timeoutId);
+    };
+  }, []);
+
+  // --- QUEUE POLLING ---
+  useEffect(() => {
+    const fetchQueuedDownloads = () => {
+      const queue = getDownloadQueue();
+      setQueuedDownloads(prev =>
+        JSON.stringify(prev) === JSON.stringify(queue) ? prev : queue
+      );
+    };
+    fetchQueuedDownloads();
+    const queueIntervalId = setInterval(fetchQueuedDownloads, 1000);
+    return () => clearInterval(queueIntervalId);
+  }, []);
+
+  // Process next queued download when downloads complete
+  useEffect(() => {
+    const activeCount = downloadingGames.filter(
+      g =>
+        g.downloadingData?.downloading ||
+        g.downloadingData?.extracting ||
+        g.downloadingData?.updating
+    ).length;
+
+    // When transitioning from active to no active downloads
+    // prevDownloadingGamesRef still holds the previous list here: the effect
+    // below that updates it runs after this one.
+    if (
+      prevActiveCountRef.current > 0 &&
+      activeCount === 0 &&
+      !freedByPause(prevDownloadingGamesRef.current, downloadingGames)
+    ) {
+      processNextInQueue().then(nextItem => {
+        if (nextItem) {
+          toast.success(
+            t("downloads.queuedDownloadStarted", { name: nextItem.gameName })
+          );
+        }
+      });
+    }
+    prevActiveCountRef.current = activeCount;
+  }, [downloadingGames, t]);
+
+  // Refresh library when a download completes (was verifying, now gone)
+  useEffect(() => {
+    const currentNames = new Set(downloadingGames.map(g => g.game));
+    const hasCompleted = prevDownloadingGamesRef.current.some(
+      game => game.downloadingData?.verifying && !currentNames.has(game.game)
+    );
+    if (hasCompleted) {
+      setRefreshTrigger(prev => prev + 1);
+    }
+    prevDownloadingGamesRef.current = downloadingGames;
+  }, [downloadingGames]);
+
+  // --- TORBOX POLLING ---
+  useEffect(() => {
+    if (!settings?.torboxApiKey) return;
+
+    const pollTorboxStates = async () => {
+      try {
+        // Get all downloading games that have a torboxWebdownloadId
+        const torboxDownloads = downloadingGames.filter(game => game.torboxWebdownloadId);
+
+        if (torboxDownloads.length === 0) return;
+
+        // Poll each TorBox download
+        const newStates = {};
+        for (const game of torboxDownloads) {
+          try {
+            const state = await torboxService.checkDownloadState(
+              settings.torboxApiKey,
+              game.torboxWebdownloadId
+            );
+            if (state && state.length > 0) {
+              newStates[game.torboxWebdownloadId] = state[0];
+            }
+          } catch (error) {
+            console.error(
+              `Error checking TorBox state for ${game.torboxWebdownloadId}:`,
+              error
+            );
+          }
+        }
+
+        setTorboxStates(newStates);
+      } catch (error) {
+        console.error("Error polling TorBox states:", error);
+      }
+    };
+
+    // Poll immediately and then every 5 seconds
+    pollTorboxStates();
+    const intervalId = setInterval(pollTorboxStates, 5000);
+    return () => clearInterval(intervalId);
+  }, [downloadingGames, settings?.torboxApiKey]);
+
+  // --- DOWNLOAD LOGIC ---
+  const handleStartDownload = async (
+    game,
+    preferredProvider = null,
+    forceStart = false
+  ) => {
+    const seamlessProviders = SEAMLESS_PROVIDERS;
+    let links = game.download_links || {};
+    if (!Object.keys(links).length && game.gameID) {
+      const catalogGame = await gameService.findGameByGameID(game.gameID);
+      links = catalogGame?.download_links || {};
+      if (catalogGame) game = { ...game, ...catalogGame };
+    }
+
+    const debridProvider = debrid.getPreferredProvider(settings);
+    const debridHosts = await debrid.getSupportedHosts(settings);
+    const firstLink = host => {
+      const candidates = links[host];
+      return Array.isArray(candidates)
+        ? candidates.find(link => typeof link === "string" && link.trim())
+        : candidates;
+    };
+    const debridHostsInGame = Object.keys(links).filter(host =>
+      debrid.canUseForHost(settings, host, firstLink(host), debridHosts)
+    );
+    const torrentOnly = Object.keys(links).every(
+      host => host === "torrent" || !firstLink(host)
+    );
+    const torrentCandidates = (
+      Array.isArray(links.torrent) ? links.torrent : [links.torrent]
+    ).filter(link => typeof link === "string" && link.trim());
+    const torrentRouteAvailable = canDownloadTorrentLinks(torrentCandidates, settings);
+    if (
+      torrentRouteAvailable &&
+      (preferredProvider === "torrent" || (!preferredProvider && torrentOnly))
+    ) {
+      setDownloadingGame(game);
+      setShowExitDialog(true);
+      return;
+    }
+
+    // Find the provider to use (preferred or first available)
+    let selectedProvider = null;
+    let downloadUrl = null;
+
+    // If a preferred provider is specified and available, use it
+    if (preferredProvider && links[preferredProvider]) {
+      selectedProvider = preferredProvider;
+      const providerLinks = links[preferredProvider];
+      downloadUrl = Array.isArray(providerLinks)
+        ? providerLinks.find(link => link && typeof link === "string")
+        : typeof providerLinks === "string"
+          ? providerLinks
+          : null;
+    }
+
+    // Otherwise find first available provider (seamless or debrid based on settings)
+    if (!downloadUrl) {
+      // If the selected debrid provider is prioritized, check its hosts first
+      if (
+        debrid
+          .getConfiguredProviders(settings)
+          .some(provider => settings[provider.prioritizeSetting])
+      ) {
+        for (const provider of debridHostsInGame) {
+          if (links[provider]) {
+            selectedProvider = provider;
+            const providerLinks = links[provider];
+            downloadUrl = Array.isArray(providerLinks)
+              ? providerLinks.find(link => link && typeof link === "string")
+              : typeof providerLinks === "string"
+                ? providerLinks
+                : null;
+            if (downloadUrl) break;
+          }
+        }
+      } else {
+        // Otherwise, prioritize seamless providers
+        for (const provider of seamlessProviders) {
+          if (links[provider]) {
+            selectedProvider = provider;
+            const providerLinks = links[provider];
+            downloadUrl = Array.isArray(providerLinks)
+              ? providerLinks.find(link => link && typeof link === "string")
+              : typeof providerLinks === "string"
+                ? providerLinks
+                : null;
+            if (downloadUrl) break;
+          }
+        }
+      }
+    }
+
+    // Debrid-only hosts need the same desktop handoff as an explicitly selected host.
+    if (!downloadUrl && Boolean(debridProvider)) {
+      for (const provider of debridHostsInGame) {
+        const candidates = links[provider];
+        const link = Array.isArray(candidates)
+          ? candidates.find(value => typeof value === "string" && value.trim())
+          : typeof candidates === "string"
+            ? candidates
+            : null;
+        if (link) {
+          selectedProvider = provider;
+          downloadUrl = link;
+          break;
+        }
+      }
+    }
+
+    // Magic Link hosts (Buzzheavier, MegaDB) resolve in a hidden window, the
+    // same as on the Download page, so they need no mouse or desktop mode.
+    // Seamless hosts come first again in case debrid priority skipped them above.
+    if (!downloadUrl) {
+      for (const provider of [...seamlessProviders, ...MAGIC_LINK_PROVIDERS]) {
+        const link = firstLink(provider);
+        if (typeof link === "string" && link.trim()) {
+          selectedProvider = provider;
+          downloadUrl = link;
+          break;
+        }
+      }
+    }
+
+    // Any other host still has a page to click through: do that outside Big Picture
+    if (!downloadUrl || !selectedProvider) {
+      if (Object.keys(links).some(host => firstLink(host))) {
+        setDownloadingGame(game);
+        setShowExitDialog(true);
+      } else {
+        toast.error(t("download.filesUnavailable.title"));
+      }
+      return;
+    }
+
+    downloadUrl = downloadUrl.replace(/^(?:https?:)?\/{2}/, "https://");
+    const routeThroughDebrid = debrid.canUseForHost(
+      settings,
+      selectedProvider,
+      downloadUrl,
+      debridHosts
+    );
+
+    if (!routeThroughDebrid && seamlessProviders.includes(selectedProvider)) {
+      await startResolvedDownload(game, downloadUrl, forceStart);
+    } else if (!routeThroughDebrid && isMagicLink(selectedProvider, downloadUrl)) {
+      await startMagicLinkDownload(game, downloadUrl, forceStart);
+    } else {
+      // Debrid or cloud download - show exit dialog
+      setDownloadingGame(game);
+      setShowExitDialog(true);
+    }
+  };
+
+  // Starts (or offers to queue) a download whose file link is already known
+  const startResolvedDownload = async (game, downloadUrl, forceStart = false) => {
+    const sanitizedGameName = sanitizeText(game.game);
+    const isVrGame = game.category?.includes("Virtual Reality");
+    const downloadData = {
+      url: downloadUrl,
+      gameName: sanitizedGameName,
+      online: game.online || false,
+      dlc: game.dlc || false,
+      isVr: isVrGame || false,
+      updateFlow: game.isUpdating || false,
+      version: game.version || "",
+      imgID: game.imgID,
+      size: game.size || "",
+      additionalDirIndex: 0,
+      gameID: game.gameID || "",
+    };
+
+    if (!forceStart && (await hasActiveDownloads())) {
+      // Non-Ascend users can only have 1 download at a time
+      if (!isAuthenticated) {
+        toast.error(t("download.toast.downloadQueueLimit"));
+        return;
+      }
+      setPendingDownloadData(downloadData);
+      setShowQueuePrompt(true);
+      return;
+    }
+
+    await launchDownload(downloadData);
+  };
+
+  const launchDownload = async data => {
+    try {
+      const result = await window.electron.downloadFile(
+        data.url,
+        data.gameName,
+        data.online,
+        data.dlc,
+        data.isVr,
+        data.updateFlow,
+        data.version,
+        data.imgID,
+        data.size,
+        data.additionalDirIndex,
+        data.gameID
+      );
+      if (result?.success === false) {
+        throw new Error(
+          result.code === "HELPER_MISSING"
+            ? t("download.toast.downloaderMissing")
+            : result.error || t("bigPicture.downloadError")
+        );
+      }
+      toast.success(t("bigPicture.downloadStarted"));
+      changeView("downloads");
+    } catch (error) {
+      console.error("Error starting download:", error);
+      toast.error(error.message || t("bigPicture.downloadError"));
+    }
+  };
+
+  // --- MAGIC LINK (hidden provider window) ---
+  const pendingMagicLink = useRef(null);
+  const magicLinkToastId = "bp-magic-link";
+  const showMagicLinkStage = useCallback(
+    stage => {
+      const labels = {
+        opening: t("download.downloadOptions.openingDownloadPage"),
+        countdown: t("download.downloadOptions.waitingForCountdown"),
+        resolving: t("download.downloadOptions.gettingDownloadLink"),
+        starting: t("download.downloadOptions.startingDownload"),
+      };
+      if (labels[stage]) toast.loading(labels[stage], { id: magicLinkToastId });
+    },
+    [t]
+  );
+  // Set while a link is being opened or resolved, so a second press is ignored
+  const magicLinkBusy = useRef(false);
+  const clearMagicLink = useCallback(() => {
+    pendingMagicLink.current = null;
+    magicLinkBusy.current = false;
+    toast.dismiss(magicLinkToastId);
+  }, []);
+
+  const startMagicLinkDownload = async (game, pageUrl, forceStart) => {
+    if (magicLinkBusy.current) return;
+    magicLinkBusy.current = true;
+    const start = url => startResolvedDownload(game, url, forceStart);
+    pendingMagicLink.current = start;
+    showMagicLinkStage("opening");
+
+    // MegaDB resolves without any window; the window is only a fallback
+    if (/megadb\.(?:net|xyz)/i.test(pageUrl)) {
+      let resolved;
+      try {
+        resolved = await window.electron.resolveMegaDbLink(pageUrl);
+      } catch (error) {
+        resolved = { error: error.message };
+      }
+      if (resolved?.url) {
+        showMagicLinkStage("starting");
+        try {
+          await start(resolved.url);
+        } finally {
+          clearMagicLink();
+        }
+        return;
+      }
+      console.warn("[BigPicture] MegaDB link not resolved:", resolved?.error);
+    }
+
+    // The page is handled in a hidden window; only shown if it needs the user
+    try {
+      const result = await window.electron.openURL(pageUrl, {
+        referrer: "https://steamrip.com/",
+        autoDownload: true,
+      });
+      if (result?.status === "intercepted") return; // handed to the listener below
+      if (result?.status === "shown") {
+        // Still waiting on the window: the user clicks through it, then the
+        // listener below picks the download up
+        magicLinkBusy.current = false;
+        toast.dismiss(magicLinkToastId);
+        toast.info(t("download.downloadOptions.buzzheavierReminder"));
+        return;
+      }
+      clearMagicLink();
+      if (result?.status === "blocked") {
+        toast.error(t("bigPicture.downloadError"));
+      }
+    } catch (error) {
+      console.error("[BigPicture] Error opening provider page:", error);
+      clearMagicLink();
+      toast.error(t("bigPicture.downloadError"));
+    }
+  };
+
+  useEffect(() => {
+    const handleIntercepted = async (_event, url) => {
+      const start = pendingMagicLink.current;
+      if (!start || !url?.startsWith("ascendara://")) return;
+      pendingMagicLink.current = null;
+      showMagicLinkStage("starting");
+      try {
+        const downloadUrl = decodeURIComponent(url.slice("ascendara://".length)).replace(
+          /\/$/,
+          ""
+        );
+        if (!["https:", "http:"].includes(new URL(downloadUrl).protocol)) {
+          throw new Error("Invalid intercepted download URL");
+        }
+        await start(downloadUrl);
+      } catch (error) {
+        console.error("[BigPicture] Error handling intercepted download:", error);
+        toast.error(t("bigPicture.downloadError"));
+      } finally {
+        clearMagicLink();
+      }
+    };
+    const removeIntercepted = window.electron.onInterceptedDownloadUrl(handleIntercepted);
+    const removeProgress = window.electron.onExternalWindowProgress(({ stage }) => {
+      // Only while a hidden-window download is still being worked on
+      if (pendingMagicLink.current) showMagicLinkStage(stage);
+    });
+    return () => {
+      removeIntercepted && removeIntercepted();
+      removeProgress && removeProgress();
+      clearMagicLink();
+    };
+  }, [showMagicLinkStage, clearMagicLink, t]);
+
+  const handlePauseDownload = async game => {
+    setStoppingDownloads(prev => new Set([...prev, game.game]));
+    try {
+      const result = await window.electron.stopDownload(game.game, false);
+      if (!result) {
+        throw new Error("Failed to pause download");
+      }
+      toast.success(t("downloads.pauseSuccess"));
+    } catch (error) {
+      console.error("Error pausing download:", error);
+      toast.error(t("downloads.errors.pauseFailed"));
+    } finally {
+      setStoppingDownloads(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(game.game);
+        return newSet;
+      });
+    }
+  };
+
+  const handleKillDownload = game => {
+    // Show confirmation dialog
+    setGameToKill(game);
+    setShowKillDialog(true);
+  };
+
+  const executeKillDownload = async () => {
+    if (!gameToKill) return;
+
+    setStoppingDownloads(prev => new Set([...prev, gameToKill.game]));
+    try {
+      const result = await window.electron.stopDownload(gameToKill.game, true, true);
+      if (!result) {
+        throw new Error("Failed to kill download");
+      }
+      setDownloadingGames(prev => prev.filter(g => g.game !== gameToKill.game));
+      toast.success(t("downloads.killSuccess"));
+    } catch (error) {
+      console.error("Error killing download:", error);
+      toast.error(t("downloads.errors.killFailed"));
+    } finally {
+      setStoppingDownloads(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(gameToKill.game);
+        return newSet;
+      });
+      setShowKillDialog(false);
+      setGameToKill(null);
+    }
+  };
+
+  const handleResumeDownload = async game => {
+    setResumingDownloads(prev => new Set([...prev, game.game]));
+    try {
+      const result = await window.electron.resumeDownload(game.game);
+      if (result.success) {
+        toast.success(t("downloads.resumeSuccess"));
+      } else {
+        setResumingDownloads(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(game.game);
+          return newSet;
+        });
+        toast.error(result.error || t("downloads.resumeError"));
+      }
+    } catch (error) {
+      console.error("Error resuming download:", error);
+      setResumingDownloads(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(game.game);
+        return newSet;
+      });
+      toast.error(error.message || t("downloads.resumeError"));
+    }
+  };
+
+  const handleOpenFolder = async game => {
+    await window.electron.openGameDirectory(game.game, game.isCustom, game);
+  };
+
+  // --- INSTALLED GAME DETAILS HANDLERS ---
+  const handleShowInstalledGameDetails = (game, autoLaunch = false) => {
+    if (isTransitioning) return;
+
+    setIsTransitioning(true);
+
+    setTimeout(() => {
+      setSelectedInstalledGame({ ...game, bigPictureAutoLaunch: autoLaunch });
+      setInstalledGameView(true);
+
+      setTimeout(() => {
+        setIsTransitioning(false);
+      }, 50);
+    }, 140);
+  };
+
+  const handleCloseInstalledGameDetails = useCallback(() => {
+    console.log("[CLOSE GAME DETAILS] Resetting view");
+
+    if (isTransitioning) return;
+
+    setIsTransitioning(true);
+
+    setTimeout(() => {
+      // Use functional updates to ensure we're working with latest state
+      setInstalledGameView(prev => {
+        console.log(
+          "[CLOSE GAME DETAILS] Setting installedGameView from",
+          prev,
+          "to false"
+        );
+        return false;
+      });
+      setSelectedInstalledGame(null);
+
+      // Reset any active sidebar state
+      setIsHomeSidebarActive(false);
+      setHomeSidebarIndex(-1);
+
+      // Trigger games refresh to update library after potential deletion
+      setRefreshTrigger(prev => prev + 1);
+
+      setTimeout(() => {
+        setIsTransitioning(false);
+      }, 50);
+    }, 200);
+  }, [isTransitioning]);
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const settings = await window.electron.getSettings();
+        if (settings?.bigPictureKeyboardLayout) {
+          setKeyboardLayout(settings.bigPictureKeyboardLayout);
+        }
+      } catch (e) {}
+    };
+    loadSettings();
+  }, []);
+
+  // Debounced search for better performance
+  const debouncedSearchQuery = useDebouncedValue(storeSearchQuery, 300);
+
+  const filteredStoreGames = useMemo(() => {
+    let filtered = storeGames;
+
+    // Apply search filter
+    if (debouncedSearchQuery.trim()) {
+      filtered = filtered.filter(game => {
+        const gameTitle = game.game || game.name || "";
+        const gameDesc = game.desc || "";
+        return fuzzyMatch(gameTitle + " " + gameDesc, debouncedSearchQuery);
+      });
+    }
+
+    // Apply content filters (DLC/Online)
+    if (showDLC || showOnline) {
+      filtered = filtered.filter(game => {
+        if (showDLC && showOnline) {
+          return game.dlc || game.online;
+        } else if (showDLC) {
+          return game.dlc;
+        } else if (showOnline) {
+          return game.online;
+        }
+        return true;
+      });
+    }
+
+    // Apply sorting
+    const sortFn = (() => {
+      switch (selectedSort) {
+        case "weight":
+          return (a, b) => (b.weight || 0) - (a.weight || 0);
+        case "weight-asc":
+          return (a, b) => (a.weight || 0) - (b.weight || 0);
+        case "name":
+          return (a, b) => (a.game || a.name || "").localeCompare(b.game || b.name || "");
+        case "name-desc":
+          return (a, b) => (b.game || b.name || "").localeCompare(a.game || a.name || "");
+        case "latest_update-desc":
+          return (a, b) => {
+            if (!a.latest_update && !b.latest_update) return 0;
+            if (!a.latest_update) return 1;
+            if (!b.latest_update) return -1;
+            return new Date(b.latest_update) - new Date(a.latest_update);
+          };
+        default:
+          return null;
+      }
+    })();
+
+    return sortFn ? [...filtered].sort(sortFn) : filtered;
+  }, [storeGames, debouncedSearchQuery, fuzzyMatch, showDLC, showOnline, selectedSort]);
+
+  const displayedStoreGames = useMemo(() => {
+    return filteredStoreGames.slice(0, displayedCount);
+  }, [filteredStoreGames, displayedCount]);
+
+  const hasMore = displayedCount < filteredStoreGames.length;
+
+  const searchSuggestions = useMemo(() => {
+    if (!storeSearchQuery.trim()) return [];
+    return filteredStoreGames.slice(0, 20);
+  }, [filteredStoreGames, storeSearchQuery]);
+
+  const changeView = useCallback(
+    newView => {
+      if (newView === view || isTransitioning) return;
+
+      setPreviousView(view);
+      // Top-level surfaces have no exit animation. Commit immediately so rapid
+      // shoulder presses are not dropped behind an artificial transition lock.
+      setCarouselIndex(0);
+      setLibraryIndex(0);
+      setStoreIndex(0);
+      setIsSearchBarSelected(false);
+      setStoreSearchQuery("");
+      setView(newView);
+      setDisplayedCount(30);
+    },
+    [view, isTransitioning]
+  );
+
+  useEffect(() => {
+    if (view !== "store") return;
+
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0].isIntersecting && hasMore) {
+          setDisplayedCount(prev => prev + GAMES_PER_LOAD);
+        }
+      },
+      { threshold: 0.1, rootMargin: "200px" }
+    );
+
+    if (loaderRef.current) observer.observe(loaderRef.current);
+    return () => observer.disconnect();
+  }, [hasMore, view, displayedCount]);
+
+  // Reset pagination if search changes
+  useEffect(() => {
+    setDisplayedCount(30);
+    setStoreIndex(0);
+  }, [storeSearchQuery]);
+
+  // Context menu timer - shows game details after 1 second of selection
+  useEffect(() => {
+    // Always clear existing timer and hide menu when index changes
+    if (contextMenuTimerRef.current) {
+      clearTimeout(contextMenuTimerRef.current);
+      contextMenuTimerRef.current = null;
+    }
+
+    // Immediately hide context menu when navigating to a different game
+    setContextMenuGame(null);
+    setContextMenuPosition(null);
+
+    // Reset context menu if not in store view or search bar is selected
+    if (view !== "store" || isSearchBarSelected || isMenuOpen) {
+      return;
+    }
+
+    // Set timer to show context menu after 1 second
+    if (
+      displayedStoreGames.length > 0 &&
+      storeIndex >= 0 &&
+      storeIndex < displayedStoreGames.length
+    ) {
+      contextMenuTimerRef.current = setTimeout(() => {
+        const selectedGame = displayedStoreGames[storeIndex];
+        setContextMenuGame(selectedGame);
+
+        // Calculate position near the selected card
+        const cardElements = document.querySelectorAll("[data-store-card]");
+        const selectedCard = cardElements[storeIndex];
+        if (selectedCard) {
+          const rect = selectedCard.getBoundingClientRect();
+
+          // Get the scrollable container to account for scroll offset
+          const scrollContainer = selectedCard.closest(".overflow-y-auto");
+          const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+
+          // Position to the right of the card, or left if too close to right edge
+          const spaceOnRight = window.innerWidth - rect.right;
+          const menuWidth = 420;
+          const menuHeight = 500; // Approximate height
+
+          let x, y;
+          if (spaceOnRight > menuWidth + 20) {
+            // Position to the right
+            x = rect.right + 20;
+          } else {
+            // Position to the left
+            x = rect.left - menuWidth - 20;
+          }
+
+          // Center vertically on the card, accounting for scroll position
+          y = rect.top + scrollTop + rect.height / 2 - menuHeight / 2;
+
+          // Keep within reasonable bounds (relative to document, not viewport)
+          y = Math.max(scrollTop + 20, y);
+          x = Math.max(20, Math.min(x, window.innerWidth - menuWidth - 20));
+
+          setContextMenuPosition({ x, y });
+        }
+      }, 1000);
+    }
+
+    // Cleanup timer on unmount or when dependencies change
+    return () => {
+      if (contextMenuTimerRef.current) {
+        clearTimeout(contextMenuTimerRef.current);
+        contextMenuTimerRef.current = null;
+      }
+    };
+  }, [storeIndex, view, isSearchBarSelected, isMenuOpen, displayedStoreGames]);
+
+  useEffect(() => {
+    const fetchGames = async () => {
+      try {
+        const installed = await window.electron.getGames();
+        let custom = [];
+        try {
+          custom = await window.electron.getCustomGames();
+        } catch (e) {}
+        // Combine installed and custom games
+        const records = [
+          ...(installed || []).map(game => ({
+            ...game,
+            isCustom: false,
+          })),
+          ...(custom || []).map(game => ({
+            ...game,
+            name: game.game,
+            game: game.game,
+            version: game.version,
+            online: game.online,
+            dlc: game.dlc,
+            executable: game.executable,
+            isCustom: true,
+          })),
+        ];
+
+        setLibraryRecords(records);
+      } catch (error) {
+        toast.error("Unable to load library. Open Library and choose Refresh to retry.");
+      }
+    };
+    fetchGames();
+  }, [refreshTrigger]);
+
+  useEffect(() => {
+    const recent = new Map(
+      recentGamesService.getRecentGames().map((game, index) => [game.game, index])
+    );
+    let carousel = [...allGames].sort(
+      (a, b) =>
+        (recent.get(a.game) ?? Infinity) - (recent.get(b.game) ?? Infinity) ||
+        (a.game || a.name || "").localeCompare(b.game || b.name || "")
+    );
+    if (carousel.length > 20)
+      carousel = [
+        ...carousel.slice(0, 20),
+        { isSeeMore: true, game: t("bigPicture.seeMore"), name: t("bigPicture.seeMore") },
+      ];
+    setCarouselGames(carousel);
+  }, [allGames, t]);
+
+  useEffect(() => {
+    const fetchStore = async () => {
+      if (storeGames.length > 0) return;
+      setStoreLoading(true);
+      try {
+        const response = await gameService.getAllGames();
+        let list = Array.isArray(response) ? response : response.games || [];
+        setStoreGames(list);
+      } catch (e) {
+        toast.error(t("bigPicture.unableToLoadCatalog"));
+      } finally {
+        setStoreLoading(false);
+      }
+    };
+    if (view === "store" || view === "carousel") fetchStore();
+  }, [view, storeGames.length, storeRevision]);
+
+  // Reload the catalog when the index changes, the same way Search does, so
+  // Big Picture never offers links the index has since dropped or replaced
+  useEffect(() => {
+    const handleIndexRefresh = () => {
+      gameService.clearMemoryCache();
+      setStoreGames([]);
+      setStoreRevision(value => value + 1);
+    };
+    window.addEventListener("index-refreshed", handleIndexRefresh);
+    return () => window.removeEventListener("index-refreshed", handleIndexRefresh);
+  }, []);
+
+  useEffect(() => {
+    if (isMenuOpen) {
+      setMenuIndex(0);
+    }
+  }, [isMenuOpen, view]);
+
+  const handleSelectSuggestion = useCallback(game => {
+    setIsKeyboardOpen(false);
+    setSelectedStoreGame(game);
+    setView("details");
+  }, []);
+
+  const handleConfirmSearch = useCallback(() => {
+    setIsKeyboardOpen(false);
+    setView("store");
+    setIsSearchBarSelected(false);
+    if (filteredStoreGames.length > 0) setStoreIndex(0);
+  }, [filteredStoreGames.length]);
+
+  const handleSelectStoreGame = useCallback(
+    (game, index) => {
+      if (isTransitioning) return;
+
+      setIsTransitioning(true);
+
+      setTimeout(() => {
+        setIsSearchBarSelected(false);
+        setStoreIndex(index);
+        setSelectedStoreGame(game);
+        setView("details");
+
+        setTimeout(() => {
+          setIsTransitioning(false);
+        }, 50);
+      }, 140);
+    },
+    [isTransitioning]
+  );
+
+  const handleMenuAction = useCallback(
+    action => {
+      setIsMenuOpen(false);
+      if (action === "controller") setShowControllerSettings(true);
+      else if (action === "refresh") setRefreshTrigger(value => value + 1);
+      else if (action === "exit_bp") setShowExitBigPictureDialog(true);
+      else if (action === "power") changeView("power");
+    },
+    [changeView]
+  );
+
+  // --- MAIN NAVIGATION LOGIC (SHARED BETWEEN KEYBOARD & GAMEPAD) ---
+  const handleNavigation = useCallback(
+    action => {
+      // Block all navigation when any dialog is open
+      if (
+        showExitDialog ||
+        showExitBigPictureDialog ||
+        showControllerSettings ||
+        showKillDialog ||
+        showProviderDialog ||
+        showQueuePrompt
+      ) {
+        return;
+      }
+
+      if (isKeyboardOpen) {
+        return;
+      }
+
+      // Allow InstalledGameDetailsView to handle its own navigation
+      if (installedGameView) {
+        return;
+      }
+
+      // Allow GameDetailsView to handle its own navigation
+      if (view === "details" && action === "MENU") {
+        console.log("[GAME DETAILS VIEW] Menu pressed");
+        setView("store");
+        setSelectedStoreGame(null);
+        return;
+      } else if (view === "details") {
+        // GameDetailsView handles all other navigation internally
+        return;
+      }
+
+      if (view === "indexes" || (view === "cloud" && surfaceInputLock.current)) {
+        surfaceNavigation.current?.(action);
+        return;
+      }
+
+      if (isMenuOpen) {
+        if (action === "DOWN")
+          setMenuIndex(p => Math.min(p + 1, sidebarItems.length - 1));
+        else if (action === "UP") setMenuIndex(p => Math.max(p - 1, 0));
+        else if (action === "BACK" || action === "MENU") setIsMenuOpen(false);
+        else if (action === "CONFIRM") handleMenuAction(sidebarItems[menuIndex]?.action);
+        return;
+      }
+
+      if (
+        [
+          "carousel",
+          "library",
+          "retro",
+          "cloud",
+          "profile",
+          "preferences",
+          "power",
+          "downloads",
+          "store",
+        ].includes(view)
+      ) {
+        if (action === "PREVIOUS_PAGE" || action === "NEXT_PAGE") {
+          const index = pageLinks.findIndex(([id]) => id === view);
+          const step = action === "NEXT_PAGE" ? 1 : -1;
+          const next =
+            index < 0
+              ? step > 0
+                ? 0
+                : pageLinks.length - 1
+              : (index + step + pageLinks.length) % pageLinks.length;
+          pageFocusRequest.current = true;
+          changeView(pageLinks[next][0]);
+          return;
+        }
+        if (action === "MENU") setIsMenuOpen(true);
+        else if (action === "SEARCH") setIsKeyboardOpen(true);
+        else surfaceNavigation.current?.(action);
+        return;
+      }
+
+      if (view === "details") return;
+
+      if (view === "downloads") {
+        const maxIndex = downloadingGames.length - 1;
+
+        if (action === "DOWN") {
+          setDownloadsIndex(p => Math.min(p + 1, maxIndex));
+        } else if (action === "UP") {
+          setDownloadsIndex(p => Math.max(p - 1, 0));
+        } else if (action === "BACK") {
+          changeView("carousel");
+        } else if (action === "MENU") {
+          setIsMenuOpen(true);
+        }
+        return;
+      }
+
+      if (view === "library") {
+        const maxIndex = allGames.length - 1;
+
+        if (action === "RIGHT") {
+          const isAtRowEnd = (libraryIndex + 1) % GRID_COLS === 0;
+          if (!isAtRowEnd && libraryIndex < maxIndex) {
+            setLibraryIndex(p => {
+              console.log("[LIBRARY] RIGHT:", p, "→", p + 1);
+              return p + 1;
+            });
+          } else {
+            console.log("[LIBRARY] RIGHT blocked - at row end or max");
+          }
+        } else if (action === "LEFT") {
+          const isAtRowStart = libraryIndex % GRID_COLS === 0;
+          if (!isAtRowStart && libraryIndex > 0) {
+            setLibraryIndex(p => {
+              console.log("[LIBRARY] LEFT:", p, "→", p - 1);
+              return p - 1;
+            });
+          } else {
+            console.log("[LIBRARY] LEFT blocked - at row start");
+          }
+        } else if (action === "DOWN") {
+          if (libraryIndex + GRID_COLS <= maxIndex) {
+            setLibraryIndex(p => {
+              console.log("[LIBRARY] DOWN:", p, "→", p + GRID_COLS);
+              return p + GRID_COLS;
+            });
+          }
+        } else if (action === "UP") {
+          if (libraryIndex >= GRID_COLS) {
+            setLibraryIndex(p => {
+              console.log("[LIBRARY] UP:", p, "→", p - GRID_COLS);
+              return p - GRID_COLS;
+            });
+          }
+        } else if (action === "MENU") setIsMenuOpen(true);
+        else if (action === "BACK") changeView("carousel");
+        else if (action === "CONFIRM" && allGames[libraryIndex])
+          handleShowInstalledGameDetails(allGames[libraryIndex]);
+        return;
+      }
+
+      if (view === "store") {
+        const maxIndex = filteredStoreGames.length - 1;
+
+        if (isSearchBarSelected) {
+          if (action === "DOWN" && displayedStoreGames.length > 0) {
+            setIsSearchBarSelected(false);
+            setStoreIndex(0);
+          } else if (action === "CONFIRM") setIsKeyboardOpen(true);
+          else if (action === "BACK") {
+            if (storeSearchQuery) setStoreSearchQuery("");
+            else changeView("carousel");
+          } else if (action === "MENU") setIsMenuOpen(true);
+        } else {
+          if (action === "RIGHT") {
+            const isAtRowEnd = (storeIndex + 1) % GRID_COLS === 0;
+            if (!isAtRowEnd && storeIndex < maxIndex) {
+              setStoreIndex(p => p + 1);
+            }
+          } else if (action === "LEFT") {
+            const isAtRowStart = storeIndex % GRID_COLS === 0;
+            if (!isAtRowStart && storeIndex > 0) {
+              setStoreIndex(p => p - 1);
+            }
+          } else if (action === "DOWN") {
+            if (storeIndex + GRID_COLS <= maxIndex) {
+              setStoreIndex(p => p + GRID_COLS);
+            }
+          } else if (action === "UP") {
+            const newIdx = storeIndex - GRID_COLS;
+            if (newIdx < 0) {
+              setIsSearchBarSelected(true);
+            } else {
+              setStoreIndex(newIdx);
+            }
+          } else if (action === "MENU") setIsMenuOpen(true);
+          else if (action === "BACK") setIsSearchBarSelected(true);
+          else if (action === "CONFIRM" && displayedStoreGames[storeIndex]) {
+            handleSelectStoreGame(displayedStoreGames[storeIndex], storeIndex);
+          }
+        }
+
+        if (storeIndex >= displayedCount - GRID_COLS && hasMore) {
+          setDisplayedCount(prev => prev + GAMES_PER_LOAD);
+        }
+        return;
+      }
+
+      // Default: Carousel
+      const currentList = carouselGames;
+
+      if (action === "RIGHT" && isHomeSidebarActive) {
+        setIsHomeSidebarActive(false);
+        setHomeSidebarIndex(-1);
+      } else if (action === "UP" && isHomeSidebarActive) {
+        setHomeSidebarIndex(p => Math.max(p - 1, 0));
+      } else if (action === "DOWN" && isHomeSidebarActive) {
+        setHomeSidebarIndex(p => Math.min(p + 1, 4));
+      } else if (action === "CONFIRM" && isHomeSidebarActive) {
+        // Execute sidebar action
+        if (homeSidebarIndex === 0) {
+          changeView("carousel");
+        } else if (homeSidebarIndex === 1) {
+          changeView("library");
+        } else if (homeSidebarIndex === 2) {
+          changeView("store");
+        } else if (homeSidebarIndex === 3) {
+          changeView("downloads");
+        } else if (homeSidebarIndex === 4) {
+          setShowExitBigPictureDialog(true);
+        }
+        setIsHomeSidebarActive(false);
+        setHomeSidebarIndex(-1);
+      } else if (action === "RIGHT") {
+        setCarouselIndex(p => {
+          const newIndex = Math.min(p + 1, currentList.length - 1);
+          if (newIndex !== p) console.log("[CAROUSEL] RIGHT:", p, "→", newIndex);
+          return newIndex;
+        });
+      } else if (action === "LEFT") {
+        setCarouselIndex(p => {
+          const newIndex = Math.max(p - 1, 0);
+          if (newIndex !== p) console.log("[CAROUSEL] LEFT:", p, "→", newIndex);
+          return newIndex;
+        });
+      } else if (action === "UP") {
+        // Activate sidebar from carousel
+        setIsHomeSidebarActive(true);
+        setHomeSidebarIndex(0);
+      } else if (action === "DOWN") {
+        // Activate sidebar from carousel
+        setIsHomeSidebarActive(true);
+        setHomeSidebarIndex(0);
+      } else if (action === "MENU") setIsMenuOpen(true);
+      else if (action === "CONFIRM") {
+        const game = currentList[carouselIndex];
+        if (game?.isSeeMore) changeView("library");
+        else if (game) handleShowInstalledGameDetails(game);
+      }
+    },
+    [
+      handleMenuAction,
+      isKeyboardOpen,
+      isMenuOpen,
+      installedGameView,
+      isHomeSidebarActive,
+      homeSidebarIndex,
+      menuIndex,
+      view,
+      allGames,
+      libraryIndex,
+      filteredStoreGames.length,
+      isSearchBarSelected,
+      displayedStoreGames,
+      storeIndex,
+      storeSearchQuery,
+      displayedCount,
+      hasMore,
+      carouselGames,
+      carouselIndex,
+      changeView,
+      navigate,
+      handleSelectStoreGame,
+      handleShowInstalledGameDetails,
+      downloadingGame,
+      showExitDialog,
+      showExitBigPictureDialog,
+      showControllerSettings,
+      showKillDialog,
+      showProviderDialog,
+      showQueuePrompt,
+    ]
+  );
+
+  // Keyboard Event Listener
+  useEffect(() => {
+    const handleKeyDown = e => {
+      // The embedded index manager handles native form and dialog keyboard input.
+      if (view === "indexes") return;
+      // Block navigation when any dialog is open or just closed
+      if (
+        showExitDialog ||
+        showExitBigPictureDialog ||
+        showControllerSettings ||
+        showKillDialog ||
+        showProviderDialog ||
+        providerDialogJustClosed.current ||
+        isKeyboardOpen
+      )
+        return;
+
+      if (e.defaultPrevented || (e.repeat && !e.key.startsWith("Arrow"))) return;
+
+      const keyMap = {
+        ArrowUp: "UP",
+        ArrowDown: "DOWN",
+        ArrowLeft: "LEFT",
+        ArrowRight: "RIGHT",
+        Enter: "CONFIRM",
+        Escape: "BACK",
+        Backspace: "BACK",
+        Tab: "MENU",
+        m: "MENU",
+        ContextMenu: "MENU",
+        " ": "SEARCH",
+        PageUp: "PREVIOUS_PAGE",
+        PageDown: "NEXT_PAGE",
+      };
+
+      if (keyMap[e.key]) {
+        e.preventDefault();
+        handleNavigation(keyMap[e.key]);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    handleNavigation,
+    showExitDialog,
+    showExitBigPictureDialog,
+    showControllerSettings,
+    showKillDialog,
+    showProviderDialog,
+    isKeyboardOpen,
+    view,
+  ]);
+
+  useControllerInput(handleNavigation, {
+    priority: 0,
+    blocked:
+      showExitDialog ||
+      showExitBigPictureDialog ||
+      showControllerSettings ||
+      showKillDialog ||
+      showProviderDialog ||
+      showQueuePrompt ||
+      assetSearchOpen ||
+      providerDialogJustClosed.current ||
+      isKeyboardOpen ||
+      !!installedGameView,
+  });
+
+  return {
+    libraryConflict,
+    resolveLibraryConflict,
+    deferLibraryConflict: library.defer,
+    reviewLibraryConflicts: library.review,
+    libraryPendingCount: library.pendingCount,
+    selectedSort,
+    setSelectedSort,
+    refreshStore: () => {
+      setStoreGames([]);
+      setStoreRevision(value => value + 1);
+    },
+    surfaceNavigation,
+    surfaceInputLock,
+    pageFocusRequest,
+    handleMenuAction,
+    handleShowInstalledGameDetails,
+    refreshLibrary: () => setRefreshTrigger(value => value + 1),
+    showKillDialog,
+    showProviderDialog,
+    isKeyboardOpen,
+    storeSearchQuery,
+    setStoreSearchQuery,
+    setIsKeyboardOpen,
+    handleConfirmSearch,
+    searchSuggestions,
+    handleSelectSuggestion,
+    keyboardLayout,
+    t,
+    settings,
+    showExitDialog,
+    setShowExitDialog,
+    downloadingGame,
+    navigate,
+    showExitBigPictureDialog,
+    setShowExitBigPictureDialog,
+    showControllerSettings,
+    setShowControllerSettings,
+    updateSetting,
+    setKeyboardLayout,
+    isMenuOpen,
+    menuIndex,
+    setMenuIndex,
+    buttons,
+    setIsMenuOpen,
+    changeView,
+    view,
+    installedGameView,
+    isTransitioning,
+    isHomeSidebarActive,
+    homeSidebarIndex,
+    setIsHomeSidebarActive,
+    setHomeSidebarIndex,
+    carouselGames,
+    carouselIndex,
+    setCarouselIndex,
+    downloadingGames,
+    allGames,
+    libraryIndex,
+    setLibraryIndex,
+    isSearchBarSelected,
+    setIsSearchBarSelected,
+    filteredStoreGames,
+    storeLoading,
+    displayedStoreGames,
+    storeIndex,
+    handleSelectStoreGame,
+    loaderRef,
+    hasMore,
+    contextMenuGame,
+    contextMenuPosition,
+    downloadsIndex,
+    torboxStates,
+    handlePauseDownload,
+    handleResumeDownload,
+    handleKillDownload,
+    handleOpenFolder,
+    stoppingDownloads,
+    resumingDownloads,
+    isAuthenticated,
+    queuedDownloads,
+    selectedStoreGame,
+    setIsTransitioning,
+    setView,
+    setSelectedStoreGame,
+    handleStartDownload,
+    launchDownload,
+    setProviderDialogGame,
+    setProviderDialogProviders,
+    setShowProviderDialog,
+    providerDialogJustClosed,
+    selectedInstalledGame,
+    handleCloseInstalledGameDetails,
+    setAssetSearchGame,
+    setAssetSearchOpen,
+    assetSearchOpen,
+    gameToKill,
+    setShowKillDialog,
+    setGameToKill,
+    executeKillDownload,
+    providerDialogGame,
+    providerDialogProviders,
+    showQueuePrompt,
+    pendingDownloadData,
+    setShowQueuePrompt,
+    setPendingDownloadData,
+    controllerType,
+    assetSearchGame,
+    showWelcomeAnimation,
+  };
+}
+
+export { useBigPicturePage };

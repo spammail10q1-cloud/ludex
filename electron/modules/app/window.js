@@ -1,0 +1,685 @@
+/**
+ * Window Management Module
+ * Handles window creation, visibility, and related operations
+ */
+
+const { BrowserWindow, screen, ipcMain, dialog, app } = require("electron");
+const path = require("path");
+const { isDev } = require("../core/config");
+const { initializeDiscordRPC } = require("./discord-rpc");
+const { getSettingsManager } = require("../core/settings");
+const {
+  isAllowedAppNavigation,
+  isAllowedAuthPopup,
+  isSafeExternalUrl,
+  registerTrustedWebContents,
+} = require("../core/security");
+
+let mainWindowHidden = false;
+let isHandlingProtocolUrl = false;
+let bigPictureWindowBounds = null;
+
+// Settled once app.js knows whether this process holds the local server's port. A
+// window opened before that (a second launch or a deep link at startup) waits for it,
+// and nothing is trusted until the answer is yes.
+let settleAppServerOwned;
+const appServerOwned = new Promise(resolve => {
+  settleAppServerOwned = resolve;
+});
+let appServerErrorCode;
+let appServerPortHolder;
+
+const LOAD_FAILURE_CAUSES = [
+  'Missing Visual C++ Redistributables - <a href="https://aka.ms/vs/17/release/vc_redist.x64.exe" style="color: #3b82f6;">Download here</a>',
+  "Antivirus blocking the app",
+  "Port 46859 being used by another application",
+];
+const PORT_IN_USE_CAUSES = [
+  "Another program is serving port 46859, so Ludex will not load that page as itself",
+  "If that program is Ludex, an older copy is still running in the background. End it in Task Manager, then open Ludex again",
+  "To see which one: on Windows run <code>netstat -ano | findstr :46859</code>, on macOS or Linux run <code>lsof -i :46859</code>",
+];
+// EACCES on Windows is almost always a range Hyper-V, WSL or Docker reserved, which
+// netstat does not show.
+const PORT_RESERVED_CAUSES = [
+  "Windows has reserved port 46859 for Hyper-V, WSL or Docker, so Ludex cannot use it",
+  "To check: run <code>netsh interface ipv4 show excludedportrange protocol=tcp</code> and look for a range that includes 46859",
+  "To free it: in a terminal opened as administrator, run <code>net stop winnat</code> then <code>net start winnat</code>, then open Ludex again",
+];
+// The local server is already listening by the time the page loads, so a timeout means
+// something dropped the connection on the way, almost always security software filtering
+// traffic for this exe's path.
+const CONNECTION_TIMEOUT_CAUSES = [
+  "An antivirus or firewall blocking Ludex from connecting to itself. Add the Ludex install folder as an exception, or pause the firewall and open Ludex again",
+  "A firewall rule set to Block for Ludex. Check the Inbound and Outbound Rules in Windows Defender Firewall's advanced settings and remove it",
+  "A VPN or network filtering tool intercepting local connections",
+  ...(process.platform === "win32"
+    ? [
+        "If none of these help, try the portable version of Ascendara from <code>github.com/Ascendara/ascendara/releases/latest</code>. It runs from a different location, so firewall rules on the installed copy do not affect it",
+      ]
+    : []),
+];
+// ERR_CONNECTION_TIMED_OUT and ERR_TIMED_OUT
+const CONNECTION_TIMEOUT_CODES = new Set([-118, -7]);
+
+/** Show a helpful error page instead of a white screen. */
+function showLoadFailure(
+  mainWindow,
+  errorDescription,
+  errorCode,
+  causes = LOAD_FAILURE_CAUSES
+) {
+  const safeDescription = String(errorDescription).replace(
+    /[&<>"']/g,
+    char =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]
+  );
+  const page = `
+  <html>
+    <head>
+      <style>
+        body { background: #09090b; color: #fff; font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; flex-direction: column; }
+        h1 { color: #ef4444; margin-bottom: 16px; }
+        p { color: #a1a1aa; max-width: 500px; text-align: center; line-height: 1.6; }
+        code { background: #27272a; padding: 2px 6px; border-radius: 4px; }
+      </style>
+    </head>
+    <body>
+      <h1>Failed to Load Ludex</h1>
+      <p>Error: ${safeDescription} (${errorCode})</p>
+      <p>This may be caused by:</p>
+      ${causes.map(cause => `<p>• ${cause}</p>`).join("\n      ")}
+      <p>Try restarting Ludex or your computer.</p>
+    </body>
+  </html>
+    `;
+  // Encoded, because a raw "#" (the colours) would start a URL fragment and cut the page.
+  mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(page)}`);
+}
+
+/**
+ * Whether this process holds the local server's port.
+ * @param {boolean} owned
+ * @param {string} [errorCode] - Why the port could not be held, when it was not
+ * @param {string|null} [portHolder] - The program holding the port, when known
+ */
+function setAppServerOwned(owned, errorCode, portHolder) {
+  appServerErrorCode = errorCode;
+  appServerPortHolder = portHolder;
+  settleAppServerOwned(owned === true);
+}
+
+/**
+ * Run callback when a window createWindow() just returned has loaded its first page.
+ * The load starts only after the port answer, so isLoading() is still false right
+ * after createWindow(), and a message sent then reaches no page.
+ */
+function whenFirstPageLoads(mainWindow, callback) {
+  mainWindow.webContents.once("did-finish-load", callback);
+}
+
+/**
+ * Create the main application window
+ * @returns {BrowserWindow} - The created window
+ */
+function createWindow() {
+  // Detect if Big Picture mode should be used
+  const startInBigPicture = process.argv.some(
+    arg => arg.toLowerCase() === "--big-picture"
+  );
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+
+  // If screen height is less than 900px, likely a laptop
+  const isLaptop = screenHeight < 900;
+
+  const windowWidth = isLaptop ? Math.min(1500, screenWidth * 0.9) : 1600;
+  const windowHeight = isLaptop ? Math.min(700, screenHeight * 0.9) : 800;
+
+  const iconFile = process.platform !== "win32" ? "icon.png" : "icon.ico";
+  const mainWindow = new BrowserWindow({
+    title: "Ludex",
+    icon: path.join(__dirname, "../..", iconFile),
+    width: windowWidth,
+    height: windowHeight,
+    frame: false,
+    show: false,
+    backgroundColor: "#09090b",
+    // Enable native full-screen if asked for
+    ...(startInBigPicture
+      ? process.platform === "darwin"
+        ? { simpleFullscreen: true }
+        : { fullscreen: true }
+      : {}),
+    webPreferences: {
+      preload: path.join(__dirname, "../..", "preload.js"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      // Disable sandbox for Linux compatibility
+      sandbox: false,
+      // Disable web security to allow CORS requests to external APIs
+      webSecurity: false,
+      // Must be explicitly true for openDevTools() to work in packaged builds
+      devTools: true,
+      // Keep rendering at full rate while visible to avoid idle black screens.
+      // Throttling is switched on while hidden or minimized (see setIdle below).
+      backgroundThrottling: false,
+    },
+  });
+
+  // Width, Height
+  mainWindow.setMinimumSize(600, 400);
+
+  // Only show the window when it's ready to be displayed.
+  // When launched at login with "start minimized" enabled, the app is started
+  // with a `--hidden` argument (set via app.setLoginItemSettings' `args`
+  // option in settings.js) so we keep the window hidden instead of showing it.
+  let windowShown = false;
+  mainWindow.once("ready-to-show", () => {
+    console.log("ready-to-show event fired");
+    windowShown = true;
+    const hasProtocolArg = process.argv.some(
+      arg =>
+        typeof arg === "string" &&
+        arg
+          .trim()
+          .replace(/^["']+|["']+$/g, "")
+          .startsWith("ascendara://")
+    );
+    const shouldStartHidden = process.argv.includes("--hidden") && !hasProtocolArg;
+
+    if (shouldStartHidden) {
+      mainWindowHidden = true;
+      mainWindow.webContents.setBackgroundThrottling(true);
+      console.log("Window kept hidden due to --hidden flag");
+    } else {
+      mainWindow.show();
+      mainWindowHidden = false;
+      console.log("Window shown via ready-to-show event");
+    }
+  });
+
+  // Fallback for Linux: if ready-to-show doesn't fire within 3 seconds, show the window anyway
+  // This handles cases where the event might not fire properly on some Linux configurations
+  if (process.platform === "linux") {
+    setTimeout(() => {
+      if (
+        !mainWindow.isDestroyed() &&
+        !windowShown &&
+        !process.argv.includes("--hidden")
+      ) {
+        console.log("ready-to-show timeout - forcing window show on Linux");
+        mainWindow.show();
+        mainWindowHidden = false;
+      }
+    }, 3000);
+  }
+
+  // Adding hash to URL
+  const urlSuffix = startInBigPicture ? "#/bigpicture" : "";
+
+  const targetUrl = isDev
+    ? "http://localhost:5173" + urlSuffix
+    : "http://localhost:46859" + urlSuffix;
+
+  console.log(`Loading window from: ${targetUrl}`);
+  const loadApp = () => {
+    registerTrustedWebContents(mainWindow.webContents, new URL(targetUrl).origin);
+    mainWindow.loadURL(targetUrl);
+  };
+  // This page is trusted as the app. When another program holds the port, that page
+  // is not ours.
+  if (isDev) {
+    loadApp();
+  } else {
+    appServerOwned.then(owned => {
+      if (mainWindow.isDestroyed()) return;
+      if (owned) loadApp();
+      else if (appServerErrorCode === "EACCES")
+        showLoadFailure(
+          mainWindow,
+          "Ludex is not allowed to use port 46859",
+          "port reserved",
+          PORT_RESERVED_CAUSES
+        );
+      else if (appServerErrorCode === "EADDRINUSE")
+        showLoadFailure(
+          mainWindow,
+          appServerPortHolder
+            ? `Port 46859 is being used by ${appServerPortHolder}`
+            : "Another program is using port 46859",
+          "port in use",
+          PORT_IN_USE_CAUSES
+        );
+      else
+        showLoadFailure(
+          mainWindow,
+          "Ludex could not open port 46859",
+          appServerErrorCode || "unknown"
+        );
+    });
+  }
+
+  // Add load event listeners for debugging
+  mainWindow.webContents.on("did-start-loading", () => {
+    console.log("Window started loading");
+  });
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    console.log("Window finished loading");
+  });
+
+  mainWindow.webContents.on("dom-ready", () => {
+    console.log("Window DOM ready");
+  });
+
+  // Handle load failures (e.g., local server not running)
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3 || validatedURL?.startsWith("data:")) return;
+      console.error(`Failed to load: ${errorCode} - ${errorDescription}`);
+      showLoadFailure(
+        mainWindow,
+        errorDescription,
+        errorCode,
+        CONNECTION_TIMEOUT_CODES.has(errorCode)
+          ? CONNECTION_TIMEOUT_CAUSES
+          : LOAD_FAILURE_CAUSES
+      );
+    }
+  );
+
+  const guardNavigation = (event, url) => {
+    if (!isAllowedAppNavigation(url)) event.preventDefault();
+  };
+  mainWindow.webContents.on("will-navigate", guardNavigation);
+  mainWindow.webContents.on("will-redirect", guardNavigation);
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // Allow Firebase/Google auth popups
+    if (isAllowedAuthPopup(url)) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+            webSecurity: true,
+            preload: "",
+          },
+        },
+      };
+    }
+    // Open other external links in system browser
+    if (isSafeExternalUrl(url)) {
+      require("electron")
+        .shell.openExternal(url)
+        .catch(error => console.warn("Unable to open link:", error.message));
+    }
+    return { action: "deny" };
+  });
+
+  // While hidden or minimized (e.g. during gameplay), let Chromium throttle
+  // timers and stop painting. Restore full rate and repaint when shown again.
+  const setIdle = idle => {
+    if (mainWindow.isDestroyed()) return;
+    mainWindow.webContents.setBackgroundThrottling(idle);
+    if (!idle) mainWindow.webContents.invalidate();
+  };
+  mainWindow.on("minimize", () => setIdle(true));
+  mainWindow.on("restore", () => setIdle(false));
+
+  // Add window event listeners
+  mainWindow.on("hide", () => {
+    mainWindowHidden = true;
+    console.log("Window hidden event fired");
+    // Notify renderer to set status to invisible when hiding to tray
+    mainWindow.webContents.send("app-hidden");
+    setIdle(true);
+  });
+
+  mainWindow.on("show", () => {
+    mainWindowHidden = false;
+    setIdle(false);
+    console.log("Window shown event fired");
+    // Notify renderer to restore status when showing from tray
+    mainWindow.webContents.send("app-shown");
+  });
+
+  mainWindow.on("close", () => {
+    console.log("Window close event fired");
+  });
+
+  // Recover from GPU/renderer process crashes that cause a black screen
+  mainWindow.webContents.on("render-process-gone", (event, details) => {
+    console.error(
+      `Renderer process gone: ${details.reason} (exitCode: ${details.exitCode})`
+    );
+    if (details.reason === "clean-exit") return;
+    // Defer reload so Chromium can finish crash cleanup first (prevents observer assertion)
+    setTimeout(() => {
+      if (!mainWindow.isDestroyed()) {
+        console.log("Reloading window to recover from renderer crash...");
+        mainWindow.reload();
+      }
+    }, 500);
+  });
+
+  return mainWindow;
+}
+
+/**
+ * Hide the main window
+ */
+function hideWindow() {
+  // Don't hide window if handling protocol URL
+  if (isHandlingProtocolUrl) {
+    console.log("Skipping window hide during protocol URL handling");
+    return;
+  }
+
+  const mainWindow = BrowserWindow.getAllWindows().find(win => win);
+  if (mainWindow) {
+    mainWindowHidden = true;
+    mainWindow.hide();
+    console.log("Window hidden");
+  }
+}
+
+/**
+ * Show the main window
+ */
+function showWindow() {
+  const mainWindow = BrowserWindow.getAllWindows().find(win => win);
+  if (mainWindow) {
+    mainWindowHidden = false;
+    mainWindow.show();
+
+    // Restore if minimized
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+
+    // Add setAlwaysOnTop temporarily to force focus
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.focus();
+    mainWindow.webContents.focus();
+    // Remove the always on top flag after focusing
+    setTimeout(() => {
+      if (!mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(false);
+    }, 100);
+  } else {
+    console.log("Creating new window from showWindow function");
+    createWindow();
+    initializeDiscordRPC();
+  }
+}
+
+/**
+ * Set the protocol URL handling flag
+ * @param {boolean} value - Whether currently handling protocol URL
+ */
+function setHandlingProtocolUrl(value) {
+  isHandlingProtocolUrl = value;
+}
+
+/**
+ * Check if main window is hidden
+ * @returns {boolean}
+ */
+function isMainWindowHidden() {
+  return mainWindowHidden;
+}
+
+/**
+ * Set main window hidden state
+ * @param {boolean} value
+ */
+function setMainWindowHidden(value) {
+  mainWindowHidden = value;
+}
+
+/**
+ * Get the main window
+ * @returns {BrowserWindow|null} - The main window or null if not found
+ */
+function getMainWindow() {
+  return BrowserWindow.getAllWindows().find(win => win) || null;
+}
+
+/**
+ * Show an error dialog
+ * @param {string} title - Dialog title
+ * @param {string} message - Dialog message
+ */
+async function showErrorDialog(title, message) {
+  const window = BrowserWindow.getFocusedWindow();
+  if (window) {
+    await dialog.showMessageBox(window, {
+      type: "error",
+      title: title,
+      message: message,
+      buttons: ["OK"],
+    });
+  }
+}
+
+/**
+ * Register window-related IPC handlers
+ */
+function registerWindowHandlers() {
+  ipcMain.handle("shutdown-system", () => require("./system-power").shutdownSystem());
+  // Open DevTools (available in production on Linux for debugging)
+  ipcMain.handle("open-devtools", () => {
+    const mainWindow = BrowserWindow.getAllWindows()[0];
+    if (mainWindow) {
+      if (mainWindow.webContents.isDevToolsOpened()) {
+        mainWindow.webContents.closeDevTools();
+      } else {
+        mainWindow.webContents.openDevTools({ mode: "detach" });
+      }
+    }
+  });
+
+  // Minimize the window
+  ipcMain.handle("minimize-window", () => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (win) win.minimize();
+  });
+
+  // Maximize the window
+  ipcMain.handle("maximize-window", () => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (win) {
+      if (win.isMaximized()) {
+        win.unmaximize();
+        return false;
+      } else {
+        win.maximize();
+        return true;
+      }
+    }
+    return false;
+  });
+
+  // Let the interface knows if it's already at max at start
+  ipcMain.handle("is-window-maximized", () => {
+    const win = BrowserWindow.getFocusedWindow();
+    return win ? win.isMaximized() : false;
+  });
+
+  // Handle fullscreen toggle
+  ipcMain.handle("toggle-fullscreen", () => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (win) {
+      win.setFullScreen(!win.isFullScreen());
+      return win.isFullScreen();
+    }
+    return false;
+  });
+
+  ipcMain.handle("get-fullscreen-state", () => {
+    const win = BrowserWindow.getFocusedWindow();
+    return win ? win.isFullScreen() : false;
+  });
+
+  // Explicitly set the native fullscreen state. Uses getMainWindow() (not
+  // getFocusedWindow()) so this reliably works even if the window has lost
+  // focus (e.g. when a dialog closed or the OS fullscreen transition itself
+  // caused a focus change) - callers like Big Picture mode depend on this to
+  // guarantee the window actually leaves fullscreen instead of relying solely
+  // on the DOM Fullscreen API, which can silently fail to sync.
+  ipcMain.handle("set-fullscreen", (_, value) => {
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) {
+      if (process.platform === "darwin") {
+        if (value) {
+          if (bigPictureWindowBounds || win.isSimpleFullScreen()) return true;
+          const bounds = win.getBounds();
+          win.setSimpleFullScreen(true);
+          if (win.isSimpleFullScreen()) return true;
+          const displayBounds = screen.getDisplayMatching(bounds).bounds;
+          bigPictureWindowBounds = bounds;
+          win.setBounds(displayBounds);
+          const currentBounds = win.getBounds();
+          return Object.keys(displayBounds).every(
+            key => currentBounds[key] === displayBounds[key]
+          );
+        }
+        if (win.isSimpleFullScreen()) win.setSimpleFullScreen(false);
+        if (bigPictureWindowBounds) {
+          win.setBounds(bigPictureWindowBounds);
+          bigPictureWindowBounds = null;
+        }
+        return false;
+      }
+      win.setFullScreen(!!value);
+      return win.isFullScreen();
+    }
+    return false;
+  });
+
+  // Close the window
+  ipcMain.handle("close-window", async (_, forceQuit = false) => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (win) {
+      const settingsManager = getSettingsManager();
+      const settings = settingsManager.getSettings();
+
+      if (forceQuit === true || settings.endOnClose) {
+        // Set quitting flag to allow app to quit
+        app.isQuitting = true;
+        console.log("Closing app completely...");
+
+        // Destroy all windows to ensure cleanup
+        BrowserWindow.getAllWindows().forEach(window => {
+          if (!window.isDestroyed()) {
+            window.destroy();
+          }
+        });
+
+        // Force quit the app
+        app.quit();
+      } else {
+        // Default behavior
+        mainWindowHidden = true;
+        win.hide();
+        console.log("Window hidden to tray");
+      }
+    }
+  });
+
+  // Clear cache
+  ipcMain.handle("clear-cache", async () => {
+    try {
+      const mainWindow = BrowserWindow.getAllWindows()[0];
+      if (mainWindow) {
+        // Clear all browser data including cache, cookies, storage etc.
+        await mainWindow.webContents.session.clearStorageData({
+          storages: [
+            "appcache",
+            "cookies",
+            "filesystem",
+            "indexdb",
+            "localstorage",
+            "shadercache",
+            "websql",
+            "serviceworkers",
+            "cachestorage",
+          ],
+        });
+
+        // Clear HTTP cache specifically
+        await mainWindow.webContents.session.clearCache();
+
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error("Error clearing cache:", error);
+      return false;
+    }
+  });
+
+  // Get asset path
+  ipcMain.handle("get-asset-path", (_, filename) => {
+    const fs = require("fs-extra");
+    let assetPath;
+    if (!app.isPackaged) {
+      // In development
+      assetPath = path.join(__dirname, "../../../src/public", filename);
+    } else {
+      // In production
+      assetPath = path.join(process.resourcesPath, "public", filename);
+    }
+
+    if (!fs.existsSync(assetPath)) {
+      console.error(`Asset not found: ${assetPath}`);
+      return null;
+    }
+
+    // Return the raw file data as base64
+    const imageBuffer = fs.readFileSync(assetPath);
+    return `data:image/png;base64,${imageBuffer.toString("base64")}`;
+  });
+
+  // Get audio asset as base64 data URL
+  ipcMain.handle("get-audio-asset", (_, filename) => {
+    if (typeof filename !== "string" || !/^sounds\/ascend[1-4]\.mp3$/.test(filename)) {
+      throw new Error("Unknown audio asset");
+    }
+    const fs = require("fs-extra");
+    let assetPath;
+    if (!app.isPackaged) {
+      // In development
+      assetPath = path.join(__dirname, "../../../src/public", filename);
+    } else {
+      // In production
+      assetPath = path.join(process.resourcesPath, "public", filename);
+    }
+
+    if (!fs.existsSync(assetPath)) {
+      console.error(`Audio asset not found: ${assetPath}`);
+      return null;
+    }
+
+    const audioBuffer = fs.readFileSync(assetPath);
+    return `data:audio/mpeg;base64,${audioBuffer.toString("base64")}`;
+  });
+}
+
+module.exports = {
+  createWindow,
+  setAppServerOwned,
+  whenFirstPageLoads,
+  hideWindow,
+  showWindow,
+  getMainWindow,
+  setHandlingProtocolUrl,
+  isMainWindowHidden,
+  setMainWindowHidden,
+  showErrorDialog,
+  registerWindowHandlers,
+};

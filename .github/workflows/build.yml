@@ -1,0 +1,41 @@
+name: Build check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+      - run: npm install --global yarn@1.22.22
+      - run: yarn install --frozen-lockfile
+        env:
+          HUSKY: "0"
+      - run: yarn build
+
+  downloader:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.90.0 --profile minimal
+          rustup default 1.90.0
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+      - name: Build downloader
+        working-directory: binaries/AscendaraDownloader
+        run: cargo build --release --locked

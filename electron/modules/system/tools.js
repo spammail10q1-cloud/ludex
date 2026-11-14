@@ -1,0 +1,226 @@
+/**
+ * Tools Module
+ * Handles tool installation and management
+ */
+
+const fs = require("fs-extra");
+const path = require("path");
+const axios = require("axios");
+const { randomUUID } = require("crypto");
+const { pipeline } = require("stream/promises");
+const { ipcMain, BrowserWindow } = require("electron");
+const {
+  isDev,
+  isWindows,
+  isMac,
+  getHelperPath,
+  TIMESTAMP_FILE,
+  toolExecutables,
+  appDirectory,
+} = require("../core/config");
+const { updateTimestampFile } = require("../core/utils");
+
+let installedTools = [];
+let electronDl = null;
+
+// Initialize electron-dl
+(async () => {
+  electronDl = await import("electron-dl");
+})();
+
+/**
+ * Check which tools are installed
+ */
+function checkInstalledTools() {
+  try {
+    if (isDev || isMac) {
+      return;
+    }
+    const toolsDirectory = process.resourcesPath;
+
+    if (fs.existsSync(TIMESTAMP_FILE)) {
+      const timestampData = JSON.parse(fs.readFileSync(TIMESTAMP_FILE, "utf8"));
+      // "torrent" may still be recorded from before the handler was bundled
+      installedTools = (timestampData.installedTools || []).filter(tool =>
+        Object.hasOwn(toolExecutables, tool)
+      );
+      console.log("Installed tools:", installedTools);
+
+      const missingTools = installedTools.filter(
+        tool => !fs.existsSync(path.join(toolsDirectory, toolExecutables[tool]))
+      );
+
+      if (missingTools.length > 0) {
+        console.log("Missing tools:", missingTools);
+        missingTools.forEach(tool => {
+          console.log(`Redownloading ${tool}...`);
+          installTool(tool);
+        });
+      }
+    } else {
+      console.log("Timestamp file not found. No installed tools recorded.");
+    }
+  } catch (error) {
+    console.error("Error checking installed tools:", error);
+  }
+}
+
+/**
+ * Install a tool
+ * @param {string} tool - Tool name to install
+ */
+async function installTool(tool) {
+  if (!Object.hasOwn(toolExecutables, tool))
+    return { success: false, message: "Unknown tool" };
+  if (isMac && tool !== "ludusavi") {
+    const installed = getInstalledTools().includes(tool);
+    return {
+      success: installed,
+      message: installed
+        ? `${tool} is available`
+        : "Reinstall Ludex to restore the bundled helper.",
+    };
+  }
+  console.log(`Installing ${tool}`);
+  const toolUrls = {
+    translator: "https://cdn.ascendara.app/files/AscendaraLanguageTranslation.exe",
+    ludusavi: isWindows
+      ? "https://cdn.ascendara.app/files/ludusavi.exe"
+      : isMac
+        ? "https://cdn.ascendara.app/files/mac/ludusavi"
+        : "https://cdn.ascendara.app/files/linux/ludusavi",
+  };
+
+  let toolPath;
+  if (!isWindows && tool === "ludusavi") {
+    const { unixConfigDir } = require("../core/config");
+    fs.ensureDirSync(unixConfigDir);
+    toolPath = path.join(unixConfigDir, "ludusavi");
+  } else {
+    const toolExecutable = toolExecutables[tool];
+    toolPath = path.join(appDirectory, "resources", toolExecutable);
+  }
+  const downloadPath = isMac ? `${toolPath}.${randomUUID()}.download` : toolPath;
+  try {
+    const response = await axios({
+      method: "get",
+      url: toolUrls[tool],
+      responseType: "stream",
+    });
+
+    await pipeline(response.data, fs.createWriteStream(downloadPath));
+
+    if (!isWindows && tool === "ludusavi") {
+      fs.chmodSync(downloadPath, 0o755);
+    }
+    if (isMac) fs.renameSync(downloadPath, toolPath);
+
+    console.log(`${tool} downloaded successfully`);
+    return { success: true, message: `${tool} installed successfully` };
+  } catch (error) {
+    if (isMac) await fs.remove(downloadPath);
+    console.error(`Error installing ${tool}:`, error);
+    return { success: false, message: `Failed to install ${tool}: ${error.message}` };
+  }
+}
+
+/**
+ * Get list of installed tools
+ * @returns {string[]} - Array of installed tool names
+ */
+function getInstalledTools() {
+  return listInstalledTools();
+}
+
+function listInstalledTools() {
+  if (isMac) {
+    const tools = ["translator"].filter(tool =>
+      fs.existsSync(getHelperPath(toolExecutables[tool]))
+    );
+    if (require("../core/config").getLudusaviPath()) tools.push("ludusavi");
+    return tools;
+  }
+  if (isWindows && !isDev) {
+    return [...installedTools];
+  } else if (!isWindows) {
+    const { unixConfigDir: linuxConfigDir } = require("../core/config");
+    const tools = ["translator"];
+
+    // verify ludusavi
+    if (fs.existsSync(path.join(linuxConfigDir, "ludusavi"))) {
+      tools.push("ludusavi");
+    }
+    return tools;
+  } else {
+    return ["translator", "ludusavi"];
+  }
+}
+
+/**
+ * Register tool-related IPC handlers
+ */
+function registerToolHandlers() {
+  ipcMain.handle("get-installed-tools", async () => {
+    return getInstalledTools();
+  });
+
+  ipcMain.handle("install-tool", async (_, tool) => {
+    if (isMac || !Object.hasOwn(toolExecutables, tool)) return installTool(tool);
+    console.log(`Installing ${tool}`);
+
+    const toolUrls = {
+      translator: "https://cdn.ascendara.app/files/AscendaraLanguageTranslation.exe",
+      ludusavi: isWindows
+        ? "https://cdn.ascendara.app/files/ludusavi.exe"
+        : "https://cdn.ascendara.app/files/linux/ludusavi",
+    };
+
+    // On Linux, ludusavi is downloaded directly from the CDN into ~/.ascendara/
+    let toolDirectory, toolExecutable;
+    if (!isWindows && tool === "ludusavi") {
+      const { unixConfigDir: linuxConfigDir } = require("../core/config");
+      fs.ensureDirSync(linuxConfigDir);
+      toolDirectory = linuxConfigDir;
+      toolExecutable = "ludusavi";
+    } else {
+      toolExecutable = toolExecutables[tool];
+      toolDirectory = process.resourcesPath;
+    }
+    const toolPath = path.join(toolDirectory, toolExecutable);
+
+    try {
+      await electronDl.download(BrowserWindow.getFocusedWindow(), toolUrls[tool], {
+        directory: toolDirectory,
+        filename: toolExecutable,
+        onProgress: progress => {
+          console.log(`Downloading ${tool}: ${Math.round(progress.percent * 100)}%`);
+        },
+      });
+
+      if (!isWindows && tool === "ludusavi") {
+        fs.chmodSync(toolPath, 0o755);
+      }
+
+      console.log(`${tool} downloaded successfully`);
+
+      // Update installed tools list
+      installedTools.push(tool);
+
+      updateTimestampFile({
+        installedTools,
+      });
+
+      return { success: true, message: `${tool} installed successfully` };
+    } catch (error) {
+      console.error(`Error installing ${tool}:`, error);
+      return { success: false, message: `Failed to install ${tool}: ${error.message}` };
+    }
+  });
+}
+
+module.exports = {
+  checkInstalledTools,
+  installTool,
+  getInstalledTools,
+  registerToolHandlers,
+};

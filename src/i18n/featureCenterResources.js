@@ -1,0 +1,927 @@
+const featureCenterResources = {
+  en: {
+    debrid: {
+      downloadsTitle: "Debrid Downloads",
+      setupGuide: "Setup guide",
+      removeAfterDone: "Remove from the service when done",
+      removeAfterDoneDescription:
+        "Once a torrent's game is fully on your PC, delete the torrent from your account to free its slot. This also applies to games you downloaded before turning it on.",
+      sentToCloud:
+        "Sent to {{provider}}. It downloads to your PC once it is ready there.",
+      cloud: {
+        title: "Waiting at your debrid service",
+        description:
+          "These start downloading to your PC by themselves once they are ready.",
+        queued: "Queued",
+        downloading: "Downloading in the cloud",
+        ready: "Ready, waiting to download to your PC",
+        failed: "Failed",
+        stalled: "Stalled",
+        error: "Could not check",
+        remove: "Remove",
+        removed: "Removed from {{provider}}",
+        confirmTitle: "Remove this torrent?",
+        confirm:
+          "{{name}} will be deleted from your {{provider}} account and will not download.",
+        alreadyStarted: "{{name}} is already downloading to your PC, so it was kept.",
+      },
+      downloadsDescription:
+        "Cloud downloads from your debrid accounts. Finished torrents move to your PC automatically.",
+      chooseService: "Choose debrid service",
+      tabReady: "Ready",
+      tabCloud: "In cloud",
+      tabSent: "Sent to PC",
+      kindTorrent: "Torrent",
+      kindLink: "Hosted link",
+      statusReady: "Ready",
+      statusDownloading: "Downloading",
+      statusQueued: "Queued",
+      statusWaitingFiles: "Waiting for files",
+      statusFailed: "Failed",
+      statusSent: "On your PC",
+      emptyReady: "Nothing ready yet",
+      emptyReadyDesc: "Finished cloud downloads wait here until they are on your PC.",
+      emptyCloud: "Nothing in the cloud",
+      emptyCloudDesc: "Torrents and links sent to this service show their progress here.",
+      emptySent: "Nothing sent to your PC yet",
+      emptySentDesc: "Cloud downloads moved to your PC are listed here.",
+      loadingDownloads: "Loading downloads…",
+      downloadToPc: "Download to PC",
+      preparing: "Preparing…",
+      sent: "Sent",
+      sendingToast: "Getting {{name}} ready",
+      sendingToastDesc: "Asking the service for a download link…",
+      sentToast: "{{name}} is downloading to your PC",
+      sentToastDesc: "Follow its progress on the Downloads page.",
+      downloadAgain: "Download again",
+      chooseFiles: "Choose files",
+      hideFiles: "Hide files",
+      startCloud: "Start in cloud",
+      viewDownload: "View download",
+      openLink: "Open link",
+      stop: "Stop",
+      delete: "Delete",
+      points: "Points",
+      premiumLeft: "Premium left",
+      fairUse: "Fair use used",
+      days: "{{count}} days",
+      downloads: "Downloads",
+      data: "Data",
+      expires: "Premium until {{date}}",
+      settingsTitle: "Use debrid services",
+      settingsDescription:
+        "Route premium host links and magnets through your debrid accounts, then pull the finished files to your PC.",
+      featureHosts: "Premium host links",
+      featureHostsDescription:
+        "Download from hosts that are slow or capped for free users at full speed.",
+      featureTorrents: "Cloud torrents",
+      featureTorrentsDescription:
+        "Magnets download on the service's servers instead of your PC.",
+      featureHandoff: "Straight to your PC",
+      featureHandoffDescription:
+        "Finished cloud downloads move to your PC and install like any other game.",
+      summaryConnected: "Connected",
+      summaryConnectedValue: "{{count}} of {{total}} services",
+      summaryHosts: "Hosted links",
+      summaryMagnets: "Magnets",
+      routeDirect: "Direct download",
+      routeLocal: "Ludex",
+      routeNone: "Not handled",
+      openDownloads: "Open debrid downloads",
+      torrentParts: {
+        label: "When a torrent has several parts",
+        description:
+          "Skipping extras keeps the game and the language packs for your system language and English, and leaves out bonus content, soundtracks, artbooks and other languages.",
+        ask: "Ask me",
+        all: "Download all parts",
+        skipExtras: "Skip extras automatically",
+        dialogTitle: "Choose the parts to download",
+        dialogDescription: "{{name}} has several parts. Untick the ones you do not want.",
+        selected: "{{count}} of {{total}} parts, {{size}}",
+        download: "Download",
+        later: "Not now",
+        waiting: "Waiting",
+        chooseParts: "Choose parts",
+      },
+      viewDownloads: "Downloads",
+      accountsTitle: "Accounts",
+      accountsDescription:
+        "Connect each service you have an account with. Options only apply to that service.",
+      position: "#{{position}} in the download order",
+      priorityOrder: "Download order",
+      dragHint: "Drag a service or use the arrows to reorder.",
+      priorityDescription:
+        "Connected services are tried top to bottom. Hosted links go to the first one that supports the host, and magnets go to the first with cloud torrents on.",
+      status: {
+        connected: "Connected",
+        checking: "Checking account…",
+        error: "Account check failed",
+        notConnected: "Not connected",
+        paused: "Paused",
+      },
+      moveUp: "Move {{provider}} up",
+      moveDown: "Move {{provider}} down",
+      useService: "Use {{provider}}",
+      accountTitle: "Account",
+      optionsTitle: "Download options",
+      optionsNeedAccount: "Connect an account to change these.",
+      optionsPaused: "Turn the service back on to change these.",
+      planPremium: "Premium",
+      planFree: "Free",
+      noPremium: "No active premium",
+      lifetime: "Lifetime premium, no end date",
+      changeKey: "Change key",
+      disconnect: "Disconnect",
+      disconnected: "{{provider}} disconnected",
+      connect: "Connect",
+      orUseKey: "or paste an API key",
+      apiKey: "API key",
+      keyPlaceholder: "Paste your API key",
+      getApiKey: "Get an API key",
+      signIn: {
+        button: "Sign in with a code",
+        instructions: "Open {{url}} and enter this code:",
+        openPage: "Open the page",
+        cancel: "Cancel",
+        waiting: "Waiting for approval…",
+        signedIn: "Signed in with a code. The login renews by itself.",
+        signedInKey: "Signed in with a code.",
+        success: "Signed in to {{provider}}",
+        failed: "Sign-in failed. Try again.",
+        expired: "The code expired. Try again.",
+      },
+      keyDescription: "The key is checked before it is saved.",
+      useMagnets: "Cloud torrents",
+      useMagnetsDescription: "Allow this service to handle magnet links in the cloud.",
+      preferSeamless: "Prefer over direct downloads",
+      preferSeamlessDescription:
+        "Use this service for supported hosts that can also download directly.",
+      localFallback: "Fall back to local torrent download",
+      localFallbackDescription:
+        "Use local torrenting if this service cannot submit a magnet. Requires local torrenting to be enabled.",
+      preferredProvider: "Preferred debrid service",
+      preferenceDescription:
+        "Choose which configured service handles eligible downloads. If it is not configured, the first configured service is used.",
+      hostInstructions: "Process this host link with {{provider}}.",
+      torrentVia: "{{provider}} downloads this torrent in the cloud.",
+      pickLabel: "Debrid service",
+      pickDefault: "Default (your order)",
+      pickNone: "No debrid",
+      pickUnsupported:
+        "{{provider}} can't take this download. Pick another service or Default.",
+      torrentFallback:
+        "Cloud torrent submission failed. Falling back to local torrent download.",
+      handoff: {
+        folderHasInstall:
+          "Folder already has an install: remove it or pick another download folder",
+        retryingIn: "Retrying in {{seconds}} s",
+        startingIn: "Starting on your PC in {{seconds}} s",
+        startingNow: "Starting on your PC now",
+        waitingFor: "Waiting for {{game}} to finish",
+      },
+    },
+    localRefresh: {
+      torrentHandlerRequired:
+        "{{name}} only publishes torrent links that your current setup cannot handle. Enable local torrenting or choose another source.",
+    },
+    featureCenters: {
+      common: {
+        refresh: "Refresh",
+        retry: "Try again",
+        loading: "Loading…",
+        games: "games",
+        game: "game",
+        custom: "Custom",
+        remove: "Remove",
+        addPath: "Add path",
+        browse: "Browse",
+        save: "Save",
+        unavailable: "Unavailable",
+      },
+      commandPalette: {
+        category: "Commands",
+        empty: "Search games, settings, or run an Ludex command",
+        suggested: "Suggested actions",
+        toasts: {
+          upToDate: "Ludex is up to date",
+          updateAvailable: "An Ludex update is available",
+          updateAvailableDescription:
+            "Use the update button in the menu bar to install it.",
+        },
+        commands: {
+          systemCenter: {
+            label: "Open System Center",
+            description: "App info, health checks, storage and recovery tools",
+          },
+          about: {
+            label: "About My Ludex",
+            description: "Version, release channel, build details and system info",
+          },
+          checkUpdates: {
+            label: "Check for updates",
+            description: "See whether a newer version of Ludex is available",
+          },
+          health: {
+            label: "Run health check",
+            description: "Check folders, services, dependencies and optional tools",
+          },
+          storage: {
+            label: "Open Storage Manager",
+            description: "Inspect game usage and free space across configured locations",
+          },
+          recovery: {
+            label: "Open Recovery tools",
+            description: "Safe UI Mode, recovery points, rollback and diagnostics",
+          },
+          createRecovery: {
+            label: "Create Settings Recovery Point",
+            description: "Save the current Ludex settings outside browser storage",
+          },
+          restoreRecovery: {
+            label: "Restore Latest Settings Recovery Point",
+            description:
+              "Restore the newest saved settings snapshot and reload Ludex",
+          },
+          rollback: {
+            label: "Rollback to Previous Ludex Version",
+            description:
+              "Windows live branch only · uses an older official GitHub release",
+          },
+          profiles: {
+            label: "Manage Game Profiles",
+            description: "Launch commands, backups, UMU and custom save paths per game",
+          },
+          collections: {
+            label: "Open Smart Collections",
+            description:
+              "Continue Playing, Never Played, Custom, Online, VR and DLC groups",
+          },
+          bigPicture: {
+            label: "Enter Big Picture Mode",
+            description: "Open Ludex's controller-first interface",
+          },
+          localRefresh: {
+            label: "Refresh Local Index",
+            description: "Open the official Local Index refresh flow",
+          },
+          settings: {
+            label: "Open Settings",
+            description: "Go directly to Ludex settings",
+          },
+          reload: {
+            label: "Reload interface",
+            description: "Reload the renderer without changing your library or settings",
+          },
+        },
+      },
+      system: {
+        title: "Ludex System Center",
+        description:
+          "Everything about this Ludex install: app info, health, storage and recovery.",
+        tabs: {
+          about: "My Ludex",
+          health: "Health",
+          storage: "Storage",
+          recovery: "Recovery",
+        },
+        about: {
+          openFromLogo: "My Ludex",
+          tagline: "Your games, downloads and tools, all in one place.",
+          version: "Version",
+          channel: "Release channel",
+          revision: "Revision",
+          buildType: "Build",
+          installer: "Installer",
+          portable: "Portable",
+          platform: "Platform",
+          upToDate: "Up to date",
+          updateAvailable: "Update available",
+          checking: "Checking for updates…",
+          checkUpdates: "Check for updates",
+          changelog: "Changelog",
+          stats: {
+            games: "Games in library",
+            custom: "{{count}} added manually",
+            launches: "App launches",
+          },
+          thisBuild: "This build",
+          thisPc: "This PC",
+          os: "Operating system",
+          cpu: "Processor",
+          ram: "Memory",
+          gpu: "Graphics",
+          loadingSpecs: "Reading system details…",
+          specsUnavailable: "System details are unavailable.",
+          copyDetails: "Copy details",
+          copied: "Details copied",
+          copiedDescription: "Paste them into a support request or bug report.",
+          copyFailed: "Could not copy details",
+          links: "Links",
+          linkNames: {
+            website: "Website",
+            changelog: "Changelog",
+            docs: "Documentation",
+            discord: "Discord",
+            github: "GitHub",
+            feedback: "Feedback",
+          },
+          unknown: "Unknown",
+        },
+        status: {
+          healthy: "Healthy",
+          warning: "Attention",
+          error: "Problem",
+          info: "Info",
+        },
+        health: {
+          title: "System health",
+          description: "Checks the current Ludex configuration without changing it.",
+          runAgain: "Run again",
+          checking: "Checking…",
+          checkingApp: "Checking Ludex…",
+          settings: "Settings",
+          settingsOk: "Ludex can read its current configuration.",
+          settingsError: "Ludex could not read its configuration.",
+          gameDirectory: "Game directory",
+          noGameDirectory: "No primary game directory is configured.",
+          gameDirectoryBlocked:
+            "Ludex cannot create files in the configured game directory.",
+          gameDirectoryLowSpace:
+            "The directory is writable, but only {{freeSpace}} is free.",
+          gameDirectoryOk: "The directory is writable{{freeSpaceText}}.",
+          externalSource: "External Source",
+          externalSourceOk: "External Sources mode is configured.",
+          externalSourceMissing:
+            "External Sources mode is enabled without an active source.",
+          localIndex: "Local Index",
+          localIndexOk: "The configured Local Index is available.",
+          localIndexMissing:
+            "The configured Local Index could not be found at its saved path.",
+          gameIndex: "Game Index",
+          gameIndexMissing:
+            "No Local Index is configured and External Sources mode is not active.",
+          services: "Ludex services",
+          servicesOffline: "No connection to Ludex services was detected.",
+          servicesPartial:
+            "Unavailable: {{services}}. Local features can continue to work.",
+          servicesOk: "Monitor, API, CDN and R2 endpoints are reachable.",
+          tools: "Optional tools",
+          toolsCount: "{{count}} optional Ludex tool(s) are registered as installed.",
+          toolsError: "Ludex could not inspect optional tools.",
+          dependencies: "Windows game dependencies",
+          dependenciesMissing: "{{count}} missing: {{dependencies}}.",
+          dependenciesOk: "Required game dependencies were detected.",
+          dependenciesError: "Dependency status could not be checked: {{error}}",
+          umu: "UMU Launcher",
+          umuOk: "UMU Launcher is available for Linux compatibility.",
+          umuMissing: "UMU Launcher is optional and is not currently installed.",
+          steamcmd: "SteamCMD",
+          steamcmdOk: "SteamCMD is available.",
+          steamcmdMissing:
+            "SteamCMD is optional and can be installed when Workshop features need it.",
+          interrupted: "Health check interrupted",
+          interruptedDescription: "An unexpected error interrupted the health check.",
+          actions: {
+            openSettings: "Open Settings",
+            configure: "Configure",
+            review: "Review",
+            repair: "Repair",
+            setUp: "Set Up",
+            install: "Install",
+          },
+        },
+        storage: {
+          title: "Storage Manager",
+          description:
+            "Uses Ludex's existing directory scanner and drive-space cache.",
+          games: "Games",
+          freeSpace: "Free space",
+          totalCapacity: "Total capacity",
+          configuredLocations: "Configured locations",
+          manageFolders: "Manage folders",
+          used: "{{percent}}% used",
+          locationGames: "Games: {{size}}",
+          locationFree: "Free: {{size}}",
+          locationTotal: "Total: {{size}}",
+          noLocations: "No storage locations are currently available.",
+          error: "Could not inspect storage",
+        },
+        recovery: {
+          title: "Recovery",
+          description:
+            "Conservative recovery tools for the interface, settings and application version.",
+          safeMode: "Safe UI Mode",
+          safeModeDescription:
+            "Reduces animations, transitions and transparency-heavy effects when rendering is unstable.",
+          enable: "Enable",
+          disable: "Disable",
+          safeEnabled: "Safe UI Mode enabled",
+          safeDisabled: "Safe UI Mode disabled",
+          safeEnabledDescription:
+            "Animations and transparency-heavy effects are reduced until you turn it off.",
+          safeDisabledDescription: "Normal interface effects have been restored.",
+          reload: "Reload interface",
+          reloadDescription:
+            "Reloads the renderer without changing your library or settings.",
+          clearBrowserData: "Clear browser data",
+          clearBrowserDataDescription:
+            "Clears Chromium cache, cookies, LocalStorage and IndexedDB. You may be signed out. Game files and settings stored by Electron are not deleted.",
+          clearBrowserDataConfirm:
+            "Clear Ludex browser data? This clears Chromium cache, cookies, LocalStorage and IndexedDB. You may be signed out. Continue?",
+          clearAndReload: "Clear and reload",
+          recoveryPoints: "Settings recovery points",
+          recoveryPointsDescription:
+            "Snapshots are stored in Electron userData, outside Chromium browser storage. Sensitive fields stay encrypted as they are on disk.",
+          createPoint: "Create recovery point",
+          noPoints: "No settings recovery points have been created yet.",
+          restore: "Restore",
+          restoreConfirm:
+            "Restore the saved settings from {{date}} and reload Ludex? Settings added by newer versions are kept when they are not present in this recovery point.",
+          manual: "manual",
+          beforeUpdate: "before update",
+          beforeRollback: "before rollback",
+          rollback: "Version rollback",
+          rollbackDescription:
+            "On Windows live builds, Ludex can reinstall the previous official GitHub release after creating a settings recovery point.",
+          rollbackChecking: "Checking official releases…",
+          rollbackAvailable: "Previous official version: {{version}}",
+          rollbackUnavailable:
+            "No supported previous official version is available for this build.",
+          rollbackButton: "Rollback to {{version}}",
+          rollbackConfirm:
+            "Rollback Ludex to {{version}}? A settings recovery point will be created first, the official installer will be downloaded, and Ludex will close.",
+          developerDiagnostics: "Developer diagnostics",
+          developerDiagnosticsDescription:
+            "Opens DevTools through Ludex's existing Electron command for support and development builds.",
+          openDevTools: "Open DevTools",
+          devToolsUnavailable: "DevTools are unavailable in this build.",
+        },
+        toasts: {
+          dependenciesInstalling: "Installing game dependencies…",
+          dependenciesDone: "Dependency installer finished",
+          dependenciesFailed: "Dependency installation failed",
+          pointCreated: "Settings recovery point created",
+          pointCreateFailed: "Could not create recovery point",
+          pointRestoreFailed: "Could not restore recovery point",
+          browserDataFailed: "Could not clear browser data",
+          rollbackChecking: "Checking official rollback versions…",
+          rollbackNone: "No supported previous version is available",
+          rollbackNoneDescription:
+            "Binary rollback is available only on Windows live builds with an older official release.",
+          rollbackDownloading: "Downloading Ludex {{version}}…",
+          rollbackFailed: "Rollback could not start",
+        },
+      },
+      profiles: {
+        onlineFix: {
+          title: "Online-Fix",
+          description: "Native support for Online-Fix / SteamFix / FreeTP / Photon.",
+          redetect: "Re-detect",
+          detected: "Online-Fix detected",
+          notDetected: "No fix detected",
+          detectError: "Detection error",
+          protonDirect: {
+            label: "Launch via Proton Direct",
+            description:
+              "Bypasses UMU-Launcher so OnlineFix works. Steam must be running in the background.",
+          },
+          fallback: {
+            description:
+              "No Online-Fix fix detected in the game folder. If you know this game uses one (fix added after import, unrecognized file names, manual installation), you can force Proton Direct manually and provide the overrides yourself.",
+            forceLabel: "Force Proton Direct (expert mode)",
+            forceDescription:
+              "Steam must be running in the background. Only enable this if you are sure this game uses OnlineFix.",
+            overridesLabel: "WINEDLLOVERRIDES (optional)",
+            overridesPlaceholder: "e.g. onlinefix64=n;winmm=n,b",
+          },
+        },
+        title: "Game Profiles",
+        description:
+          "Keep launch, compatibility and backup behavior together for each installed game.",
+        refresh: "Refresh games",
+        noGames: "No installed games were found.",
+        loading: "Loading profile…",
+        customSuffix: "Custom",
+        unsaved: "Unsaved changes",
+        unsavedDescription: "Save or discard the current profile before switching games.",
+        discardConfirm: "Discard unsaved changes for {{game}}?",
+        closeConfirm: "Close Game Profiles and discard unsaved changes?",
+        launchCommands: "Launch commands",
+        launchCommandsDescription:
+          "Uses Ludex's existing per-game launch command field.",
+        launchCommandsPlaceholder:
+          "Leave empty to use the game's default launch behavior",
+        autoBackup: "Automatic save backups",
+        autoBackupDescription:
+          "Uses the same Ludusavi auto-backup setting already supported by Ludex.",
+        umuId: "UMU game ID",
+        umuIdDescription:
+          "Overrides the game-specific UMU mapping without changing global Proton settings.",
+        optional: "Optional",
+        savePaths: "Custom save paths",
+        savePathsDescription:
+          "These paths are passed to Ludex's existing backup integration.",
+        saveDirectory: "Save directory",
+        noSavePaths: "No custom save paths. Ludusavi will use its normal detection.",
+        compatibilityNote: "Profile settings reuse Ludex's official per-game APIs.",
+        backupTimeline: "Backup Timeline",
+        saveProfile: "Save profile",
+        saving: "Saving…",
+        saved: "Game profile saved",
+        savedDescription: "{{game}} will use these settings the next time it launches.",
+        loadGamesError: "Could not load installed games",
+        loadProfileError: "Could not load game profile",
+        saveError: "Could not save game profile",
+        pickerError: "Could not open folder picker",
+        savePathsError: "Could not save custom save paths",
+      },
+      collections: {
+        title: "Smart Collections",
+        description:
+          "Automatic views built from the library data Ludex already tracks.",
+        refresh: "Refresh library",
+        searchPlaceholder: "Filter this collection",
+        count: "{{count}} game(s)",
+        noMatches: "No games currently match this collection.",
+        loadError: "Could not load the library for Smart Collections.",
+        retry: "Retry",
+        customBadge: "Custom",
+        playtime: "{{value}} playtime",
+        collections: {
+          continue: {
+            label: "Continue Playing",
+            description: "Games Ludex has seen you launch most recently.",
+          },
+          neverPlayed: {
+            label: "Never Played",
+            description: "Installed games with no recorded playtime or recent launch.",
+          },
+          played: {
+            label: "Played",
+            description: "Games with recorded playtime or a recent launch.",
+          },
+          custom: {
+            label: "Custom Games",
+            description: "Games added manually to your Ludex library.",
+          },
+          online: {
+            label: "Online",
+            description: "Installed games marked with online support.",
+          },
+          vr: {
+            label: "VR",
+            description: "Installed games marked for VR.",
+          },
+          dlc: {
+            label: "DLC",
+            description: "Installed entries marked as DLC content.",
+          },
+        },
+      },
+    },
+  },
+  pt: {
+    featureCenters: {
+      common: {
+        refresh: "Atualizar",
+        retry: "Tentar novamente",
+        loading: "Carregando…",
+        games: "jogos",
+        game: "jogo",
+        custom: "Personalizado",
+        remove: "Remover",
+        addPath: "Adicionar pasta",
+        browse: "Procurar",
+        save: "Salvar",
+        unavailable: "Indisponível",
+      },
+      commandPalette: {
+        category: "Comandos",
+        empty: "Pesquise jogos e configurações ou execute um comando do Ludex",
+        suggested: "Ações sugeridas",
+        commands: {
+          systemCenter: {
+            label: "Abrir Central do Sistema",
+            description: "Diagnóstico, armazenamento e ferramentas de recuperação",
+          },
+          health: {
+            label: "Executar diagnóstico",
+            description:
+              "Verifique pastas, serviços, dependências e ferramentas opcionais",
+          },
+          storage: {
+            label: "Abrir Gerenciador de Armazenamento",
+            description: "Veja o uso dos jogos e o espaço livre nas pastas configuradas",
+          },
+          recovery: {
+            label: "Abrir ferramentas de recuperação",
+            description:
+              "Modo de UI segura, pontos de recuperação, rollback e diagnóstico",
+          },
+          createRecovery: {
+            label: "Criar ponto de recuperação das configurações",
+            description:
+              "Salve as configurações atuais fora do armazenamento do navegador",
+          },
+          restoreRecovery: {
+            label: "Restaurar ponto de recuperação mais recente",
+            description: "Restaure o snapshot mais recente e recarregue o Ludex",
+          },
+          rollback: {
+            label: "Voltar para a versão anterior do Ludex",
+            description:
+              "Somente Windows na branch live · usa uma release oficial anterior do GitHub",
+          },
+          profiles: {
+            label: "Gerenciar perfis de jogos",
+            description:
+              "Comandos de inicialização, backups, UMU e pastas de saves por jogo",
+          },
+          collections: {
+            label: "Abrir Coleções Inteligentes",
+            description:
+              "Continue Jogando, Nunca Jogados, Personalizados, Online, VR e DLC",
+          },
+          bigPicture: {
+            label: "Entrar no Modo Big Picture",
+            description: "Abra a interface do Ludex feita para controle",
+          },
+          localRefresh: {
+            label: "Atualizar Índice Local",
+            description: "Abra o fluxo oficial de atualização do Índice Local",
+          },
+          settings: {
+            label: "Abrir Configurações",
+            description: "Vá diretamente para as configurações do Ludex",
+          },
+          reload: {
+            label: "Recarregar interface",
+            description: "Recarregue a interface sem alterar biblioteca ou configurações",
+          },
+        },
+      },
+      system: {
+        title: "Central do Sistema Ludex",
+        description:
+          "Diagnóstico, armazenamento e recuperação sem alterar como o Ludex guarda seus jogos.",
+        tabs: { health: "Saúde", storage: "Armazenamento", recovery: "Recuperação" },
+        status: {
+          healthy: "Saudável",
+          warning: "Atenção",
+          error: "Problema",
+          info: "Informação",
+        },
+        health: {
+          title: "Saúde do sistema",
+          description: "Verifica a configuração atual do Ludex sem fazer alterações.",
+          runAgain: "Executar novamente",
+          checking: "Verificando…",
+          checkingApp: "Verificando o Ludex…",
+          settings: "Configurações",
+          settingsOk: "O Ludex consegue ler a configuração atual.",
+          settingsError: "O Ludex não conseguiu ler a configuração.",
+          gameDirectory: "Pasta de jogos",
+          noGameDirectory: "Nenhuma pasta principal de jogos está configurada.",
+          gameDirectoryBlocked:
+            "O Ludex não consegue criar arquivos na pasta de jogos configurada.",
+          gameDirectoryLowSpace:
+            "A pasta permite gravação, mas há apenas {{freeSpace}} livres.",
+          gameDirectoryOk: "A pasta permite gravação{{freeSpaceText}}.",
+          externalSource: "Fonte Externa",
+          externalSourceOk: "O modo de Fontes Externas está configurado.",
+          externalSourceMissing:
+            "O modo de Fontes Externas está ativo sem uma fonte selecionada.",
+          localIndex: "Índice Local",
+          localIndexOk: "O Índice Local configurado está disponível.",
+          localIndexMissing:
+            "O Índice Local configurado não foi encontrado no caminho salvo.",
+          gameIndex: "Índice de Jogos",
+          gameIndexMissing:
+            "Nenhum Índice Local está configurado e o modo de Fontes Externas não está ativo.",
+          services: "Serviços do Ludex",
+          servicesOffline: "Não foi detectada conexão com os serviços do Ludex.",
+          servicesPartial:
+            "Indisponíveis: {{services}}. Os recursos locais podem continuar funcionando.",
+          servicesOk: "Os endpoints Monitor, API, CDN e R2 estão acessíveis.",
+          tools: "Ferramentas opcionais",
+          toolsCount:
+            "{{count}} ferramenta(s) opcional(is) do Ludex está(ão) registrada(s) como instalada(s).",
+          toolsError: "O Ludex não conseguiu verificar as ferramentas opcionais.",
+          dependencies: "Dependências de jogos do Windows",
+          dependenciesMissing: "{{count}} ausente(s): {{dependencies}}.",
+          dependenciesOk: "As dependências necessárias para jogos foram detectadas.",
+          dependenciesError: "Não foi possível verificar as dependências: {{error}}",
+          umu: "UMU Launcher",
+          umuOk: "O UMU Launcher está disponível para compatibilidade no Linux.",
+          umuMissing: "O UMU Launcher é opcional e não está instalado no momento.",
+          steamcmd: "SteamCMD",
+          steamcmdOk: "O SteamCMD está disponível.",
+          steamcmdMissing:
+            "O SteamCMD é opcional e pode ser instalado quando os recursos da Oficina precisarem dele.",
+          interrupted: "Diagnóstico interrompido",
+          interruptedDescription: "Um erro inesperado interrompeu o diagnóstico.",
+          actions: {
+            openSettings: "Abrir Configurações",
+            configure: "Configurar",
+            review: "Revisar",
+            repair: "Reparar",
+            setUp: "Configurar",
+            install: "Instalar",
+          },
+        },
+        storage: {
+          title: "Gerenciador de Armazenamento",
+          description:
+            "Usa o scanner de diretórios e o cache de espaço em disco que o Ludex já possui.",
+          games: "Jogos",
+          freeSpace: "Espaço livre",
+          totalCapacity: "Capacidade total",
+          configuredLocations: "Locais configurados",
+          manageFolders: "Gerenciar pastas",
+          used: "{{percent}}% usado",
+          locationGames: "Jogos: {{size}}",
+          locationFree: "Livre: {{size}}",
+          locationTotal: "Total: {{size}}",
+          noLocations: "Nenhum local de armazenamento está disponível no momento.",
+          error: "Não foi possível verificar o armazenamento",
+        },
+        recovery: {
+          title: "Recuperação",
+          description:
+            "Ferramentas conservadoras de recuperação para interface, configurações e versão do aplicativo.",
+          safeMode: "Modo de UI Segura",
+          safeModeDescription:
+            "Reduz animações, transições e efeitos de transparência quando a renderização estiver instável.",
+          enable: "Ativar",
+          disable: "Desativar",
+          safeEnabled: "Modo de UI Segura ativado",
+          safeDisabled: "Modo de UI Segura desativado",
+          safeEnabledDescription:
+            "Animações e efeitos pesados de transparência ficam reduzidos até você desativar o modo.",
+          safeDisabledDescription: "Os efeitos normais da interface foram restaurados.",
+          reload: "Recarregar interface",
+          reloadDescription:
+            "Recarrega a interface sem alterar sua biblioteca ou configurações.",
+          clearBrowserData: "Limpar dados do navegador",
+          clearBrowserDataDescription:
+            "Limpa cache do Chromium, cookies, LocalStorage e IndexedDB. Sua sessão pode ser encerrada. Jogos e configurações salvas pelo Electron não são apagados.",
+          clearBrowserDataConfirm:
+            "Limpar os dados do navegador do Ludex? Isso remove cache do Chromium, cookies, LocalStorage e IndexedDB e pode encerrar sua sessão. Continuar?",
+          clearAndReload: "Limpar e recarregar",
+          recoveryPoints: "Pontos de recuperação das configurações",
+          recoveryPointsDescription:
+            "Os snapshots ficam no userData do Electron, fora do armazenamento do Chromium. Campos sensíveis permanecem criptografados como estão no disco.",
+          createPoint: "Criar ponto de recuperação",
+          noPoints: "Nenhum ponto de recuperação das configurações foi criado ainda.",
+          restore: "Restaurar",
+          restoreConfirm:
+            "Restaurar as configurações salvas de {{date}} e recarregar o Ludex? Configurações adicionadas por versões mais novas são preservadas quando não existem neste ponto de recuperação.",
+          manual: "manual",
+          beforeUpdate: "antes da atualização",
+          beforeRollback: "antes do rollback",
+          rollback: "Rollback de versão",
+          rollbackDescription:
+            "Em builds live do Windows, o Ludex pode reinstalar a release oficial anterior do GitHub após criar um ponto de recuperação.",
+          rollbackChecking: "Verificando releases oficiais…",
+          rollbackAvailable: "Versão oficial anterior: {{version}}",
+          rollbackUnavailable:
+            "Nenhuma versão oficial anterior compatível está disponível para esta build.",
+          rollbackButton: "Voltar para {{version}}",
+          rollbackConfirm:
+            "Voltar o Ludex para {{version}}? Um ponto de recuperação será criado primeiro, o instalador oficial será baixado e o Ludex será fechado.",
+          developerDiagnostics: "Diagnóstico para desenvolvedores",
+          developerDiagnosticsDescription:
+            "Abre o DevTools pelo comando Electron existente do Ludex para suporte e builds de desenvolvimento.",
+          openDevTools: "Abrir DevTools",
+          devToolsUnavailable: "O DevTools não está disponível nesta build.",
+        },
+        toasts: {
+          dependenciesInstalling: "Instalando dependências dos jogos…",
+          dependenciesDone: "Instalador de dependências finalizado",
+          dependenciesFailed: "Falha ao instalar dependências",
+          pointCreated: "Ponto de recuperação criado",
+          pointCreateFailed: "Não foi possível criar o ponto de recuperação",
+          pointRestoreFailed: "Não foi possível restaurar o ponto de recuperação",
+          browserDataFailed: "Não foi possível limpar os dados do navegador",
+          rollbackChecking: "Verificando versões oficiais para rollback…",
+          rollbackNone: "Nenhuma versão anterior compatível está disponível",
+          rollbackNoneDescription:
+            "O rollback binário está disponível apenas em builds live do Windows com uma release oficial anterior.",
+          rollbackDownloading: "Baixando Ludex {{version}}…",
+          rollbackFailed: "Não foi possível iniciar o rollback",
+        },
+      },
+      profiles: {
+        onlineFix: {
+          title: "Online-Fix",
+          description: "Suporte nativo para Online-Fix / SteamFix / FreeTP / Photon.",
+          redetect: "Detectar novamente",
+          detected: "Online-Fix detectado",
+          notDetected: "Nenhum fix detectado",
+          detectError: "Erro de detecção",
+          protonDirect: {
+            label: "Iniciar via Proton Direct",
+            description:
+              "Ignora o UMU-Launcher para que o OnlineFix funcione. O Steam precisa estar aberto em segundo plano.",
+          },
+          fallback: {
+            description:
+              "Nenhum fix Online-Fix foi detectado na pasta do jogo. Se você sabe que este jogo usa um (fix adicionado após a importação, nomes de arquivo não reconhecidos, instalação manual), você pode forçar o Proton Direct manualmente e informar os overrides você mesmo.",
+            forceLabel: "Forçar Proton Direct (modo especialista)",
+            forceDescription:
+              "O Steam precisa estar aberto em segundo plano. Ative apenas se você tiver certeza de que este jogo usa OnlineFix.",
+            overridesLabel: "WINEDLLOVERRIDES (opcional)",
+            overridesPlaceholder: "ex.: onlinefix64=n;winmm=n,b",
+          },
+        },
+        title: "Perfis de Jogos",
+        description:
+          "Mantenha inicialização, compatibilidade e backups juntos para cada jogo instalado.",
+        refresh: "Atualizar jogos",
+        noGames: "Nenhum jogo instalado foi encontrado.",
+        loading: "Carregando perfil…",
+        customSuffix: "Personalizado",
+        unsaved: "Alterações não salvas",
+        unsavedDescription: "Salve ou descarte o perfil atual antes de trocar de jogo.",
+        discardConfirm: "Descartar alterações não salvas de {{game}}?",
+        closeConfirm: "Fechar Perfis de Jogos e descartar as alterações não salvas?",
+        launchCommands: "Comandos de inicialização",
+        launchCommandsDescription:
+          "Usa o campo de comandos por jogo que já existe no Ludex.",
+        launchCommandsPlaceholder: "Deixe vazio para usar o comportamento padrão do jogo",
+        autoBackup: "Backups automáticos de saves",
+        autoBackupDescription:
+          "Usa a mesma opção de backup automático do Ludusavi já suportada pelo Ludex.",
+        umuId: "ID do jogo no UMU",
+        umuIdDescription:
+          "Substitui o mapeamento UMU deste jogo sem alterar as configurações globais do Proton.",
+        optional: "Opcional",
+        savePaths: "Pastas personalizadas de saves",
+        savePathsDescription:
+          "Essas pastas são enviadas para a integração de backup que o Ludex já possui.",
+        saveDirectory: "Pasta de saves",
+        noSavePaths: "Nenhuma pasta personalizada. O Ludusavi usará a detecção normal.",
+        compatibilityNote:
+          "As configurações do perfil reutilizam as APIs oficiais por jogo do Ludex.",
+        backupTimeline: "Linha do Tempo de Backups",
+        saveProfile: "Salvar perfil",
+        saving: "Salvando…",
+        saved: "Perfil do jogo salvo",
+        savedDescription:
+          "{{game}} usará essas configurações na próxima vez que for iniciado.",
+        loadGamesError: "Não foi possível carregar os jogos instalados",
+        loadProfileError: "Não foi possível carregar o perfil do jogo",
+        saveError: "Não foi possível salvar o perfil do jogo",
+        pickerError: "Não foi possível abrir o seletor de pastas",
+        savePathsError: "Não foi possível salvar as pastas personalizadas",
+      },
+      collections: {
+        title: "Coleções Inteligentes",
+        description:
+          "Visões automáticas criadas a partir dos dados da biblioteca que o Ludex já acompanha.",
+        refresh: "Atualizar biblioteca",
+        searchPlaceholder: "Filtrar esta coleção",
+        count: "{{count}} jogo(s)",
+        noMatches: "Nenhum jogo corresponde a esta coleção no momento.",
+        loadError:
+          "Não foi possível carregar a biblioteca para as Coleções Inteligentes.",
+        retry: "Tentar novamente",
+        customBadge: "Personalizado",
+        playtime: "{{value}} de tempo de jogo",
+        collections: {
+          continue: {
+            label: "Continue Jogando",
+            description: "Jogos que o Ludex viu você iniciar mais recentemente.",
+          },
+          neverPlayed: {
+            label: "Nunca Jogados",
+            description:
+              "Jogos instalados sem tempo de jogo registrado ou inicialização recente.",
+          },
+          played: {
+            label: "Jogados",
+            description: "Jogos com tempo registrado ou uma inicialização recente.",
+          },
+          custom: {
+            label: "Jogos Personalizados",
+            description: "Jogos adicionados manualmente à sua biblioteca do Ludex.",
+          },
+          online: {
+            label: "Online",
+            description: "Jogos instalados marcados com suporte online.",
+          },
+          vr: {
+            label: "VR",
+            description: "Jogos instalados marcados para realidade virtual.",
+          },
+          dlc: {
+            label: "DLC",
+            description: "Entradas instaladas marcadas como conteúdo DLC.",
+          },
+        },
+      },
+    },
+  },
+};
+
+export default featureCenterResources;

@@ -1,0 +1,68 @@
+/**
+ * Encryption Module
+ * Handles encryption and decryption of sensitive data
+ */
+
+const crypto = require("crypto");
+const { getMachineId } = require("./machine-id");
+
+let encryptionKey = null;
+
+/**
+ * Generate encryption key based on machine ID
+ */
+function generateEncryptionKey() {
+  encryptionKey ??= crypto
+    .createHash("sha256")
+    .update(getMachineId())
+    .digest("hex")
+    .substring(0, 32);
+  return encryptionKey;
+}
+
+/**
+ * Encrypt text using AES-256-CBC
+ * @param {string} text - Text to encrypt
+ * @returns {string|null} - Encrypted text in format "iv:encrypted", null on failure
+ */
+function encrypt(text) {
+  if (!text) return "";
+  try {
+    const key = generateEncryptionKey();
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(key), iv);
+    let encrypted = cipher.update(text, "utf8", "hex");
+    encrypted += cipher.final("hex");
+    return `${iv.toString("hex")}:${encrypted}`;
+  } catch (error) {
+    console.error("Encryption error:", error?.message);
+    return null; // Never hand back plain text as if it were encrypted
+  }
+}
+
+/**
+ * Decrypt text encrypted with encrypt()
+ * @param {string} encryptedText - Text in format "iv:encrypted"
+ * @returns {string|null} - Decrypted text, null on failure
+ */
+function decrypt(encryptedText) {
+  if (!encryptedText || !encryptedText.includes(":")) return null;
+  try {
+    const key = generateEncryptionKey();
+    const parts = encryptedText.split(":");
+    const iv = Buffer.from(parts[0], "hex");
+    const encrypted = parts[1];
+    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(key), iv);
+    let decrypted = decipher.update(encrypted, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+    return decrypted;
+  } catch {
+    return null; // Never hand back ciphertext as if it were the secret
+  }
+}
+
+module.exports = {
+  generateEncryptionKey,
+  encrypt,
+  decrypt,
+};

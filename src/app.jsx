@@ -1,0 +1,2453 @@
+import {
+  autoUploadBackupToCloud,
+  hasActiveSubscription,
+} from "@/services/cloud/cloudBackupService";
+import {
+  recordSessionStart as recordCloudSessionStart,
+  recordSessionEnd as recordCloudSessionEnd,
+} from "@/services/cloud/gameSessionTracker";
+import ContextMenu from "@/components/ContextMenu";
+import Layout from "@/components/Layout";
+import MenuBar from "@/components/MenuBar";
+import MiniPlayer from "@/components/MiniPlayer";
+import { enablePageTours } from "@/components/PageTours";
+import SupportDialog from "@/components/SupportDialog";
+import TestimonialDialog from "@/components/TestimonialDialog";
+import PlatformWarningDialog from "@/components/PlatformWarningDialog";
+import WatcherWarnDialog from "@/components/WatcherWarnDialog";
+import BrokenVersionDialog from "@/components/BrokenVersionDialog";
+import IndexRecoveryNotice from "@/components/IndexRecoveryNotice";
+import FirstIndexDialog from "@/components/FirstIndexDialog";
+import BranchWelcomeDialog from "@/components/BranchWelcomeDialog";
+import LiveUpdateOfferDialog, {
+  isLiveUpdateOfferDismissed,
+} from "@/components/LiveUpdateOfferDialog";
+import UpdateOverlay from "@/components/UpdateOverlay";
+import RepairAscendaraDialog from "@/components/RepairAscendaraDialog";
+import ChangelogDialog from "@/components/ChangelogDialog";
+import MissingDllDialog from "@/components/MissingDllDialog";
+import { LanguageProvider } from "@/context/LanguageContext";
+import { TourProvider } from "@/context/TourContext";
+import { ThemeProvider, useTheme, isDarkTheme } from "@/context/ThemeContext";
+import { SettingsProvider, useSettings } from "@/context/SettingsContext";
+import DebridBackgroundTasks from "@/components/DebridBackgroundTasks";
+import EffectsPreference from "@/components/EffectsPreference";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { SearchProvider } from "@/context/SearchContext";
+import GlobalSearch from "@/components/GlobalSearch";
+import { useGlobalSearch } from "@/hooks/useGlobalSearch";
+import { useGameIndexSearch } from "@/hooks/useGameIndexSearch";
+import { useSettingsSearch } from "@/hooks/useSettingsSearch";
+import { onDownloadStallChange } from "@/hooks/useDownloadStall";
+import { markBootComplete, useAppIcon } from "@/hooks/useAppIcon";
+import StartupSplash from "@/components/StartupSplash";
+import {
+  afterBoot,
+  syncIndexDuringBoot,
+  takeBootIndexSync,
+  whenBootReady,
+} from "@/lib/loadGate";
+import { useLibrarySearch } from "@/hooks/useLibrarySearch";
+import {
+  initializeStatusService,
+  cleanupStatusService,
+  setGamePlayingState,
+} from "@/services/ascend/ascendStatusService";
+import { setActivity, ActivityType } from "@/services/ascend/userStatusService";
+import {
+  initializeDownloadSync,
+  stopDownloadSync,
+} from "@/services/ascend/downloadSyncService";
+import {
+  initializeDesktopLibrarySync,
+  stopDesktopLibrarySync,
+} from "@/services/ascend/desktopLibrarySyncService";
+import {
+  initializeFavoritesSync,
+  stopFavoritesSync,
+} from "@/services/cloud/favoritesCloudSync";
+import {
+  initializeAchievementsSync,
+  stopAchievementsSync,
+} from "@/services/cloud/achievementsCloudSync";
+import {
+  initializeWishlistWatch,
+  stopWishlistWatch,
+  WISHLIST_MATCHES_EVENT,
+} from "@/services/ascend/wishlistWatchService";
+import {
+  getUnreadMessageCount,
+  verifyAscendAccess,
+} from "@/services/firebase/firebaseService";
+import gameService from "@/services/games/gameService";
+import {
+  UPDATE_PHASES,
+  checkForUpdates,
+  getUpdateStatus,
+  markUpdateInstallFailed,
+  markUpdateInstalling,
+  startBackgroundUpdateChecks,
+  subscribeToUpdateStatus,
+} from "@/services/app/updateCheckingService";
+import { startStatusCheck } from "@/services/app/serverStatus";
+import { motion } from "framer-motion";
+import React, { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import AdminWarningScreen from "@/components/AdminWarningScreen";
+import BrowserDownloadHandler from "@/components/BrowserDownloadHandler";
+import CheckoutReturnHandler from "@/components/CheckoutReturnHandler";
+import {
+  Navigate,
+  Route,
+  HashRouter as Router,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
+import { Toaster, toast } from "sonner";
+import Home from "./pages/Home";
+// Search is rendered persistently in Layout, not via Routes
+import i18n from "./i18n";
+import {
+  identifyUser,
+  startAnalyticsListeners,
+  track,
+  trackScreen,
+} from "@/services/app/analyticsService";
+import "./index.css";
+import "./styles/scrollbar.css";
+import "@/services/app/notificationSoundService";
+import { usesOfficialIndex } from "@/lib/combinedSources";
+import { GLOBAL_TOAST_SAFE_AREA_OFFSET } from "@/lib/toastSafeArea";
+import { AlertTriangle, RefreshCwIcon, X, Circle, Square, Triangle } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+// Keep the shell and home page ready at startup; load other screens on demand.
+function PageLoading() {
+  const { t } = useTranslation();
+
+  return (
+    <div
+      className="flex min-h-screen w-full items-center justify-center bg-background text-primary"
+      role="status"
+    >
+      <RefreshCwIcon className="h-8 w-8 animate-spin" aria-hidden="true" />
+      <span className="sr-only">
+        {t("common.loading", { defaultValue: "Loading..." })}
+      </span>
+    </div>
+  );
+}
+
+const TESTIMONIAL_MIN_LAUNCHES = 15;
+const TESTIMONIAL_MIN_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+const pagePreloads = [];
+
+// Code-split page that renders synchronously once its chunk has loaded.
+// React.lazy alone suspends on every first render, even for a warmed chunk,
+// and React holds a Suspense fallback for ~300ms. Page transitions would then
+// animate the spinner and the real page would pop in afterwards.
+function lazyPage(load) {
+  let Loaded = null;
+  const preload = () =>
+    load().then(module => {
+      Loaded = module.default;
+      return module;
+    });
+  const Page = React.lazy(preload);
+  pagePreloads.push(preload);
+  return function LazyPage(props) {
+    // Decided once per mount so a chunk finishing mid-render can't swap the
+    // tree under a page and reset its state.
+    const [Ready] = useState(() => Loaded);
+    if (Ready) return <Ready {...props} />;
+    return (
+      <React.Suspense fallback={<PageLoading />}>
+        <Page {...props} />
+      </React.Suspense>
+    );
+  };
+}
+
+const pageLoaders = {
+  download: () => import("./pages/Download"),
+  downloads: () => import("./pages/Downloads"),
+  extraLanguages: () => import("./pages/ExtraLanguages"),
+  workshopDownloader: () => import("./pages/WorkshopDownloader"),
+  sidecarAndDependencies: () => import("./pages/SidecarAndDependencies"),
+  debridDownloads: () => import("./pages/DebridDownloads"),
+  gameScreen: () => import("./pages/GameScreen"),
+  profile: () => import("./pages/Profile"),
+  ascend: () => import("./pages/Ascend"),
+  library: () => import("./pages/Library"),
+  folderView: () => import("./pages/FolderView"),
+  externalSources: () => import("./pages/ExternalSources"),
+  settings: () => import("./pages/Settings"),
+  themeStudio: () => import("./pages/ThemeStudio"),
+  welcome: () => import("./pages/Welcome"),
+  bigPicture: () => import("./pages/BigPicture"),
+};
+
+const DownloadPage = lazyPage(pageLoaders.download);
+const Downloads = lazyPage(pageLoaders.downloads);
+const ExtraLanguages = lazyPage(pageLoaders.extraLanguages);
+const WorkshopDownloader = lazyPage(pageLoaders.workshopDownloader);
+const SidecarAndDependencies = lazyPage(pageLoaders.sidecarAndDependencies);
+const DebridDownloads = lazyPage(pageLoaders.debridDownloads);
+const GameScreen = lazyPage(pageLoaders.gameScreen);
+const Profile = lazyPage(pageLoaders.profile);
+const Ascend = lazyPage(pageLoaders.ascend);
+const Library = lazyPage(pageLoaders.library);
+const FolderView = lazyPage(pageLoaders.folderView);
+const ExternalSources = lazyPage(pageLoaders.externalSources);
+const Settings = lazyPage(pageLoaders.settings);
+const ThemeStudio = lazyPage(pageLoaders.themeStudio);
+const Welcome = lazyPage(pageLoaders.welcome);
+const BigPicture = lazyPage(pageLoaders.bigPicture);
+
+function RetroRedirect() {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  params.set("tab", "retro");
+  return <Navigate to={`/library?${params}`} replace />;
+}
+
+// Warm every page chunk in the background while the splash screen is up so
+// navigating between pages renders instantly instead of flashing a fallback.
+pagePreloads.forEach(preload => preload().catch(() => {}));
+
+// Check for trial expiration warning and show dialog
+const TrialWarningChecker = () => {
+  const { t } = useTranslation();
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const [showTrialWarning, setShowTrialWarning] = useState(false);
+  const [trialDaysRemaining, setTrialDaysRemaining] = useState(0);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const reminderKey = `ascend-trial-ending-reminder:${user.uid}`;
+    let canceled = false;
+
+    const checkTrialStatus = async () => {
+      if (canceled || localStorage.getItem(reminderKey) === "shown") return;
+      try {
+        const accessStatus = await verifyAscendAccess();
+
+        // Show once, during the final day of the seven-day trial.
+        if (
+          !canceled &&
+          !accessStatus.isSubscribed &&
+          !accessStatus.isVerified &&
+          accessStatus.hasAccess &&
+          accessStatus.daysRemaining > 0 &&
+          accessStatus.daysRemaining <= 1
+        ) {
+          setTrialDaysRemaining(accessStatus.daysRemaining);
+          setShowTrialWarning(true);
+          localStorage.setItem(reminderKey, "shown");
+        }
+      } catch (error) {
+        console.error("[TrialWarningChecker] Error checking trial status:", error);
+      }
+    };
+
+    // Delay the check to let the app initialize
+    const timeout = setTimeout(checkTrialStatus, 30000);
+    const interval = setInterval(checkTrialStatus, 60 * 60 * 1000);
+    return () => {
+      canceled = true;
+      clearTimeout(timeout);
+      clearInterval(interval);
+    };
+  }, [user?.uid]);
+
+  const handleSubscribe = () => {
+    setShowTrialWarning(false);
+    navigate("/ascend");
+  };
+
+  return (
+    <AlertDialog open={showTrialWarning} onOpenChange={setShowTrialWarning}>
+      <AlertDialogContent className="border-border">
+        <AlertDialogHeader>
+          <div className="flex items-center gap-4">
+            <AlertDialogTitle className="text-2xl font-bold text-foreground">
+              {t("ascend.access.trialEndingSoon")}
+            </AlertDialogTitle>
+          </div>
+          <AlertDialogDescription asChild>
+            <div className="space-y-4">
+              <div className="text-foreground">
+                {t("ascend.access.trialEndingSoonMessage", { days: trialDaysRemaining })}
+              </div>
+              <div className="text-muted-foreground">
+                {t("ascend.access.trialEndingSoonAction")}
+              </div>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        <AlertDialogFooter className="gap-3 sm:justify-end">
+          <AlertDialogCancel className="text-foreground">
+            {t("common.close")}
+          </AlertDialogCancel>
+          <AlertDialogAction onClick={handleSubscribe}>
+            {t("ascend.subscription.upgrade")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+};
+
+// Check for deprecated GiantBomb API key and show migration warning
+const GiantBombMigrationWarning = () => {
+  const { t } = useTranslation();
+  const { settings, setSettings } = useSettings();
+  const [showWarning, setShowWarning] = useState(false);
+  const hasCheckedRef = useRef(false);
+
+  useEffect(() => {
+    // Skip if settings haven't loaded yet (check for a property that always has a value when loaded)
+    if (
+      !settings ||
+      !settings.downloadDirectory ||
+      settings.downloadDirectory.trim() === ""
+    ) {
+      return;
+    }
+
+    // Only check once after settings are loaded
+    if (hasCheckedRef.current) return;
+
+    // Check if user has a deprecated API key set
+    // Note: giantBombKey was removed from default settings, so it will only exist if user had it previously
+    const hasGiantBombKey = settings.giantBombKey && settings.giantBombKey.trim() !== "";
+
+    if (hasGiantBombKey) {
+      setShowWarning(true);
+    }
+
+    // Mark as checked AFTER we've actually checked with loaded settings
+    hasCheckedRef.current = true;
+  }, [settings]);
+
+  const handleDismiss = async () => {
+    // Clear all deprecated API keys
+    await setSettings({
+      ...settings,
+      giantBombKey: "",
+    });
+    setShowWarning(false);
+  };
+
+  return (
+    <AlertDialog open={showWarning} onOpenChange={setShowWarning}>
+      <AlertDialogContent className="border-border">
+        <AlertDialogHeader>
+          <div className="flex items-center gap-4">
+            <AlertDialogTitle className="text-2xl font-bold text-foreground">
+              {t("welcome.apiMigration.title")}
+            </AlertDialogTitle>
+          </div>
+          <AlertDialogDescription asChild>
+            <div className="space-y-4">
+              <div className="text-foreground">{t("welcome.apiMigration.goodNews")}</div>
+              <div className="text-muted-foreground">
+                {t("welcome.apiMigration.steamBuiltIn")}
+              </div>
+              <div className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
+                {t("welcome.apiMigration.whatChanged")}
+              </div>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        <AlertDialogFooter>
+          <AlertDialogAction onClick={handleDismiss}>
+            {t("welcome.okay")}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+};
+
+// Automatic Index Refresher - runs in background when enabled
+const AutomaticIndexRefresher = () => {
+  const { settings, updateSetting } = useSettings();
+
+  // Keep the shared game list up to date in the background
+  useEffect(() => {
+    if (settings?.backgroundIndexSync === false || !usesOfficialIndex(settings)) {
+      return;
+    }
+
+    const MAX_RETRIES = 5;
+    let retries = 0;
+    let retryTimeout = null;
+
+    const sync = async (pending = null) => {
+      try {
+        const result = await (pending || window.electron.syncCommunityIndex());
+        if (result?.skipped) return;
+        if (!result?.success) throw new Error(result?.error || "Sync failed");
+        retries = 0;
+
+        // Covers a first index that finished setting up after the welcome flow closed
+        if (!(await window.electron.getTimestampValue("hasIndexBefore"))) {
+          await window.electron.setTimestampValue("hasIndexBefore", true);
+        }
+        const current = await window.electron.getSettings();
+        if (!current?.usingLocalIndex && usesOfficialIndex(current)) {
+          await updateSetting("usingLocalIndex", true);
+        }
+      } catch (error) {
+        console.error("[IndexSync] Failed to sync index:", error);
+        if (retries < MAX_RETRIES) {
+          retries++;
+          retryTimeout = setTimeout(sync, 60000);
+        }
+      }
+    };
+
+    // This mounts before boot starts the launch sync (see syncIndexDuringBoot),
+    // so wait for boot and finish that sync's bookkeeping instead of syncing a
+    // second time. Without one, sync shortly after launch as before.
+    let cancelled = false;
+    let timeout = null;
+    afterBoot().then(() => {
+      if (cancelled) return;
+      const bootSync = takeBootIndexSync();
+      timeout = setTimeout(() => sync(bootSync), bootSync ? 0 : 3000);
+    });
+    const interval = setInterval(sync, 6 * 60 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      clearTimeout(retryTimeout);
+      clearInterval(interval);
+    };
+  }, [
+    settings?.backgroundIndexSync,
+    settings?.customSourcesMode,
+    settings?.combineSources,
+  ]);
+
+  return null;
+};
+
+// PlayStation button component
+const PSButton = ({ type, className = "" }) => {
+  const buttonStyles = "inline-flex items-center justify-center";
+
+  switch (type) {
+    case "cross":
+      return <X className={`${buttonStyles} ${className}`} strokeWidth={3} />;
+    case "circle":
+      return <Circle className={`${buttonStyles} ${className}`} strokeWidth={2.5} />;
+    case "square":
+      return <Square className={`${buttonStyles} ${className}`} strokeWidth={2.5} />;
+    case "triangle":
+      return <Triangle className={`${buttonStyles} ${className}`} strokeWidth={2.5} />;
+    default:
+      return null;
+  }
+};
+
+// Get controller button labels based on controller type
+const getControllerButtons = (controllerType = "xbox") => {
+  const buttonMaps = {
+    xbox: {
+      confirm: "A",
+      cancel: "B",
+    },
+    playstation: {
+      confirm: <PSButton type="cross" className="h-4 w-4" />,
+      cancel: <PSButton type="circle" className="h-4 w-4" />,
+    },
+    generic: {
+      confirm: "A",
+      cancel: "B",
+    },
+  };
+
+  return buttonMaps[controllerType] || buttonMaps.xbox;
+};
+
+const ControllerDetectionPrompt = () => {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { settings } = useSettings();
+  const [showPrompt, setShowPrompt] = useState(false);
+  const hasPromptedRef = useRef(false);
+  const controllerType = settings?.controllerType || "xbox";
+  const buttons = getControllerButtons(controllerType);
+  const [selectedButton, setSelectedButton] = useState("confirm");
+  const canAcceptInputRef = useRef(false);
+  const prevButtonsRef = useRef({ confirm: false, cancel: false });
+
+  useEffect(() => {
+    if (hasPromptedRef.current) return;
+    if (location.pathname === "/bigpicture") return;
+
+    const checkForController = () => {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      const hasController = Array.from(gamepads).some(
+        g => g && g.connected && g.axes.length >= 2 && g.buttons.length >= 10
+      );
+
+      if (hasController && !hasPromptedRef.current) {
+        setShowPrompt(true);
+        hasPromptedRef.current = true;
+      }
+    };
+
+    checkForController();
+
+    // Chromium only exposes a controller once it is used, and fires
+    // gamepadconnected at that moment, so polling adds nothing.
+    window.addEventListener("gamepadconnected", checkForController);
+
+    return () => {
+      window.removeEventListener("gamepadconnected", checkForController);
+    };
+  }, [location.pathname]);
+
+  // Dismiss controller prompt when a game launches to prevent it from
+  // remaining open when the window is hidden during gameplay
+  useEffect(() => {
+    const handleGameLaunch = () => {
+      if (showPrompt) {
+        setShowPrompt(false);
+      }
+    };
+
+    const unsubscribe = window.electron?.onGameLaunchSuccess?.(handleGameLaunch);
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [showPrompt]);
+
+  useEffect(() => {
+    if (!showPrompt) {
+      canAcceptInputRef.current = false;
+      return;
+    }
+
+    prevButtonsRef.current = { confirm: false, cancel: false };
+    canAcceptInputRef.current = false;
+    const inputDelayTimeout = setTimeout(() => {
+      canAcceptInputRef.current = true;
+    }, 500);
+
+    const handleGamepadInput = () => {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      const gamepad = Array.from(gamepads).find(
+        g => g && g.connected && g.axes.length >= 2 && g.buttons.length >= 10
+      );
+
+      if (!gamepad) return;
+
+      const confirmPressed = !!gamepad.buttons[0]?.pressed;
+      const cancelPressed = !!gamepad.buttons[1]?.pressed;
+      const wasConfirmPressed = prevButtonsRef.current.confirm;
+      const wasCancelPressed = prevButtonsRef.current.cancel;
+      prevButtonsRef.current = { confirm: confirmPressed, cancel: cancelPressed };
+
+      if (!canAcceptInputRef.current) return;
+
+      // Only react to a fresh press (rising edge), not a button already held down
+      if (confirmPressed && !wasConfirmPressed) {
+        handleEnterBigPicture();
+      } else if (cancelPressed && !wasCancelPressed) {
+        handleDismiss();
+      } else if (gamepad.buttons[12]?.pressed || gamepad.buttons[14]?.pressed) {
+        setSelectedButton("cancel");
+      } else if (gamepad.buttons[13]?.pressed || gamepad.buttons[15]?.pressed) {
+        setSelectedButton("confirm");
+      }
+    };
+
+    const intervalId = setInterval(handleGamepadInput, 100);
+
+    return () => {
+      clearInterval(intervalId);
+      clearTimeout(inputDelayTimeout);
+    };
+  }, [showPrompt]);
+
+  const handleEnterBigPicture = () => {
+    setShowPrompt(false);
+    navigate("/bigpicture");
+  };
+
+  const handleDismiss = () => {
+    setShowPrompt(false);
+  };
+
+  return (
+    <AlertDialog open={showPrompt} onOpenChange={setShowPrompt}>
+      <AlertDialogContent className="border-border">
+        <AlertDialogHeader>
+          <div className="flex items-center gap-4">
+            <AlertDialogTitle className="text-2xl font-bold text-foreground">
+              {t("bigPicture.controllerDetected")}
+            </AlertDialogTitle>
+          </div>
+          <AlertDialogDescription asChild>
+            <div className="space-y-4">
+              <div className="text-foreground">
+                {t("bigPicture.controllerDetectedMessage")}
+              </div>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+
+        <AlertDialogFooter className="gap-3 sm:justify-end">
+          <AlertDialogCancel
+            onClick={handleDismiss}
+            className={`text-foreground ${selectedButton === "cancel" ? "ring-2 ring-primary" : ""}`}
+          >
+            <span className="flex items-center gap-2">
+              {t("common.notNow")}
+              <span className="ml-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-medium">
+                {typeof buttons.cancel === "string" ? buttons.cancel : buttons.cancel}
+              </span>
+            </span>
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleEnterBigPicture}
+            className={
+              selectedButton === "confirm" ? "ring-primary-foreground ring-2" : ""
+            }
+          >
+            <span className="flex items-center gap-2">
+              {t("bigPicture.enterBigPicture")}
+              <span className="bg-primary-foreground/20 ml-2 inline-flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium">
+                {typeof buttons.confirm === "string" ? buttons.confirm : buttons.confirm}
+              </span>
+            </span>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+};
+
+const ScrollToTop = () => {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+
+  return null;
+};
+
+// Track navigation and update Discord RPC state
+const DiscordRPCTracker = () => {
+  const { pathname } = useLocation();
+  const { settings } = useSettings();
+  const lastPathRef = useRef(null);
+  const idleTimerRef = useRef(null);
+  const isGamePlayingRef = useRef(false);
+
+  // "/download" is a game's store page (reached from search), not progress
+  const isDownloadPath = path =>
+    [
+      "/downloads",
+      "/debriddownloads",
+      "/torboxdownloads",
+      "/realdebriddownloads",
+    ].includes(path);
+
+  const clearIdleTimer = () => {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+  };
+
+  const scheduleIdle = () => {
+    clearIdleTimer();
+    idleTimerRef.current = setTimeout(
+      () => {
+        if (!window.electron?.switchRPC) return;
+        if (!settings?.rpcEnabled) return;
+        // Never fall back to "idle" while a game is running or the user is
+        // watching a download's progress.
+        if (isGamePlayingRef.current) return;
+        if (isDownloadPath(lastPathRef.current)) return;
+        window.electron.switchRPC("idle");
+      },
+      2 * 60 * 1000
+    );
+  };
+
+  useEffect(() => {
+    if (!window.electron?.switchRPC) return;
+    if (!settings?.rpcEnabled) return;
+    if (lastPathRef.current === pathname) return;
+    lastPathRef.current = pathname;
+
+    // Always report the page state: the main process keeps "Playing a Game"
+    // on top while a game runs and falls back to this state when it closes.
+    if (isDownloadPath(pathname)) {
+      clearIdleTimer();
+      window.electron.switchRPC("downloading");
+    } else {
+      window.electron.switchRPC("default");
+      if (isGamePlayingRef.current) clearIdleTimer();
+      else scheduleIdle();
+    }
+  }, [pathname, settings?.rpcEnabled]);
+
+  // Track when a game is launched/closed so idle/default/downloading states
+  // never override the "Playing a Game" Discord activity.
+  useEffect(() => {
+    const handleGameLaunch = () => {
+      isGamePlayingRef.current = true;
+      clearIdleTimer();
+    };
+
+    const handleGameClosed = () => {
+      isGamePlayingRef.current = false;
+      if (!window.electron?.switchRPC || !settings?.rpcEnabled) return;
+      if (isDownloadPath(lastPathRef.current)) {
+        window.electron.switchRPC("downloading");
+      } else {
+        window.electron.switchRPC("default");
+        scheduleIdle();
+      }
+    };
+
+    const unsubLaunch = window.electron?.onGameLaunchSuccess?.(handleGameLaunch);
+    const unsubClosed = window.electron?.onGameClosed?.(handleGameClosed);
+
+    return () => {
+      unsubLaunch?.();
+      unsubClosed?.();
+    };
+  }, [settings?.rpcEnabled]);
+
+  useEffect(() => {
+    return () => clearIdleTimer();
+  }, []);
+
+  return null;
+};
+
+// Track user activity and update Firebase customMessage
+const UserActivityTracker = React.memo(() => {
+  const { pathname, state } = useLocation();
+  const { user, userData } = useAuth();
+  const { settings } = useSettings();
+  const lastPathRef = useRef(null);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    // Skip if path hasn't changed to prevent unnecessary updates
+    if (lastPathRef.current === pathname) return;
+    lastPathRef.current = pathname;
+
+    // Map routes to activity types
+    const updateActivity = async () => {
+      switch (pathname) {
+        case "/":
+          await setActivity(ActivityType.BROWSING_LIBRARY);
+          break;
+        case "/search":
+          await setActivity(ActivityType.SEARCHING_GAMES);
+          break;
+        case "/library":
+          await setActivity(ActivityType.BROWSING_LIBRARY);
+          break;
+        case "/downloads":
+        case "/debriddownloads":
+        case "/torboxdownloads":
+        case "/realdebriddownloads":
+          await setActivity(ActivityType.BROWSING_DOWNLOADS);
+          break;
+        case "/settings":
+          await setActivity(ActivityType.IN_SETTINGS);
+          break;
+        case "/ascend":
+          await setActivity(ActivityType.IN_ASCEND);
+          break;
+        case "/download": {
+          // When viewing a specific game's download page
+          const gameName = state?.gameData?.game || state?.gameData?.name;
+          if (gameName) {
+            await setActivity(ActivityType.VIEWING_GAME, gameName);
+          } else {
+            await setActivity(ActivityType.SEARCHING_GAMES);
+          }
+          break;
+        }
+        case "/gamescreen": {
+          // When viewing a game's details
+          const gameScreenName = state?.game?.game || state?.game?.name;
+          if (gameScreenName) {
+            await setActivity(ActivityType.VIEWING_GAME, gameScreenName);
+          }
+          break;
+        }
+        default:
+          await setActivity(ActivityType.IDLE);
+          break;
+      }
+    };
+
+    updateActivity();
+  }, [pathname, state?.gameData?.game, state?.game?.game, user?.uid]);
+
+  // macOS: first launch of a Windows game sets up Highball before it starts.
+  useEffect(() => {
+    return window.electron?.onHighballSetupProgress?.(progress => {
+      if (!progress?.game) return;
+      if (progress.stage === "done") {
+        toast.dismiss("highball-setup");
+        return;
+      }
+      const size = progress.totalBytes
+        ? ` (${Math.round(progress.receivedBytes / 1048576)} / ${Math.round(progress.totalBytes / 1048576)} MB)`
+        : "";
+      toast.loading(i18n.t("settings.macCompat.preparingGame", { game: progress.game }), {
+        id: "highball-setup",
+        description: `${progress.message}${size}`,
+        duration: Infinity,
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    const dismiss = () => toast.dismiss("highball-setup");
+    const unsubError = window.electron?.onGameLaunchError?.(dismiss);
+    const unsubLaunch = window.electron?.onGameLaunchSuccess?.(dismiss);
+    return () => {
+      unsubError?.();
+      unsubLaunch?.();
+    };
+  }, []);
+
+  // Keep launch diagnostics alive when navigating back to the library.
+  useEffect(() => {
+    return window.electron?.onGameClosed?.((_, data) => {
+      if (!data?.quickExit) return;
+      toast.warning(i18n.t("gameScreen.quickExitDialog.title"), {
+        description: i18n.t("gameScreen.quickExitDialog.description", {
+          game: data.game,
+        }),
+        duration: Infinity,
+        closeButton: true,
+        action: {
+          label: i18n.t("gameScreen.quickExitDialog.openFolder"),
+          onClick: () => {
+            window.electron
+              .openGameDirectory(data.game, data.isCustom, data.installation)
+              .catch(error => console.error("Failed to open game folder:", error));
+          },
+        },
+      });
+    });
+  }, []);
+
+  // Listen for game launch/close events
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const handleGameLaunch = (_, data) => {
+      const gameName = data?.game || "a game";
+      setGamePlayingState(true);
+      setActivity(ActivityType.PLAYING_GAME, gameName);
+
+      // Cloud-first profile sync: snapshot baseline so we can push only the
+      // delta on close instead of the full local total. Gated by Ascend
+      // access — non-premium users keep local-only behavior.
+      if (data?.game && hasActiveSubscription(userData)) {
+        recordCloudSessionStart(data.game).catch(err =>
+          console.warn("[CloudSync] recordSessionStart failed:", err?.message || err)
+        );
+      }
+    };
+
+    const handleGameClosed = async (_, data) => {
+      setGamePlayingState(false);
+      // Restore to browsing library when game closes
+      setActivity(ActivityType.BROWSING_LIBRARY);
+
+      // Cloud-first profile sync: push the session delta (playtime, launch
+      // count) atomically to Firestore. Never blocks; failures are logged.
+      const gameName = data?.game;
+      if (gameName && hasActiveSubscription(userData)) {
+        try {
+          const deltaResult = await recordCloudSessionEnd(gameName);
+          if (deltaResult?.success) {
+            console.log(
+              `[CloudSync] Pushed session delta for ${gameName}:`,
+              deltaResult.applied
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[CloudSync] recordSessionEnd error for ${gameName}:`,
+            err?.message || err
+          );
+        }
+      }
+
+      // Auto-upload backup to cloud if enabled
+      if (gameName && user && settings) {
+        try {
+          const result = await autoUploadBackupToCloud(
+            gameName,
+            settings,
+            user,
+            userData
+          );
+          if (result.success) {
+            console.log(`[CloudBackup] Auto-uploaded backup for ${gameName}`);
+          } else {
+            console.warn(
+              `[CloudBackup] Auto-upload failed for ${gameName}:`,
+              result.error
+            );
+          }
+        } catch (error) {
+          console.error(`[CloudBackup] Error auto-uploading for ${gameName}:`, error);
+        }
+      }
+    };
+
+    // Listen for game events from Electron
+    const unsubLaunch = window.electron?.onGameLaunchSuccess?.(handleGameLaunch);
+    const unsubClosed = window.electron?.onGameClosed?.(handleGameClosed);
+
+    return () => {
+      unsubLaunch?.();
+      unsubClosed?.();
+    };
+  }, [user?.uid, settings, userData]);
+
+  // Listen for download events
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    let currentDownloadGame = null;
+
+    const handleDownloadProgress = data => {
+      // Only update if the game name changed to avoid spamming Firebase
+      if (data?.game && data.game !== currentDownloadGame) {
+        currentDownloadGame = data.game;
+        setActivity(ActivityType.DOWNLOADING, data.game);
+      }
+    };
+
+    const handleDownloadComplete = data => {
+      currentDownloadGame = null;
+      // Return to browsing after download completes
+      setActivity(ActivityType.BROWSING_LIBRARY);
+    };
+
+    const unsubProgress = window.electron?.onDownloadProgress?.(handleDownloadProgress);
+    const unsubComplete = window.electron?.onDownloadComplete?.(handleDownloadComplete);
+
+    return () => {
+      if (typeof unsubProgress === "function") unsubProgress();
+      if (typeof unsubComplete === "function") unsubComplete();
+    };
+  }, [user?.uid]);
+
+  return null;
+});
+
+UserActivityTracker.displayName = "UserActivityTracker";
+
+// Initialize Ascend status service when user is authenticated
+const AscendStatusInitializer = () => {
+  const { user } = useAuth();
+
+  useEffect(() => {
+    if (user?.uid) {
+      console.log("[App] Initializing Ascend status service for user:", user.uid);
+      initializeStatusService(null, user.uid).catch(err => {
+        console.error("[App] Failed to initialize status service:", err);
+      });
+
+      return () => {
+        cleanupStatusService();
+      };
+    }
+  }, [user?.uid]);
+
+  return null;
+};
+
+// Announce Steam wishlist games that just showed up in the index. The first
+// check only reports what was already available, as one summary.
+const WishlistAlertNotifier = () => {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const openGame = async gameID => {
+      const game = await gameService.findGameByGameID(gameID);
+      if (!game) {
+        navigate("/ascend", { state: { section: "notifications" } });
+        return;
+      }
+      navigate("/download", {
+        state: { gameData: { ...game, download_links: game.download_links || {} } },
+      });
+    };
+
+    const handleMatches = event => {
+      const { matches = [], initial } = event.detail || {};
+      if (!matches.length) return;
+
+      if (initial || matches.length > 1) {
+        const message = i18n.t(
+          initial ? "ascend.wishlist.alreadyAvailable" : "ascend.wishlist.newGames",
+          { count: matches.length }
+        );
+        toast.success(message, {
+          duration: 10000,
+          action: {
+            label: i18n.t("ascend.wishlist.view"),
+            onClick: () => navigate("/ascend", { state: { section: "notifications" } }),
+          },
+        });
+        if (!initial) {
+          window.electron?.showNotification?.(i18n.t("ascend.wishlist.title"), message);
+        }
+        return;
+      }
+
+      const [match] = matches;
+      const message = i18n.t("ascend.wishlist.nowAvailable", { game: match.name });
+      toast.success(message, {
+        duration: 10000,
+        action: {
+          label: i18n.t("ascend.wishlist.view"),
+          onClick: () => openGame(match.gameID),
+        },
+      });
+      window.electron?.showNotification?.(i18n.t("ascend.wishlist.title"), message);
+    };
+
+    window.addEventListener(WISHLIST_MATCHES_EVENT, handleMatches);
+    return () => window.removeEventListener(WISHLIST_MATCHES_EVENT, handleMatches);
+  }, [navigate]);
+
+  return null;
+};
+
+// Warn wherever the user is when a running download stops making progress.
+const DownloadStallNotifier = () => {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    return onDownloadStallChange(stall => {
+      if (!stall?.game) return;
+      const id = `download-stall-${stall.game}`;
+      if (!stall.stalled) {
+        toast.dismiss(id);
+        return;
+      }
+      toast.warning(i18n.t("downloads.stalled.toast", { game: stall.game }), {
+        id,
+        description:
+          stall.phase === "extraction"
+            ? i18n.t("downloads.stalled.extraction")
+            : i18n.t("downloads.stalled.download"),
+        duration: Infinity,
+        closeButton: true,
+        action: {
+          label: i18n.t("downloads.stalled.view"),
+          onClick: () => navigate("/downloads"),
+        },
+      });
+    });
+  }, [navigate]);
+
+  return null;
+};
+
+// Initialize download sync service when user is authenticated with Ascend access
+const DownloadSyncInitializer = () => {
+  const { user, isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    initializeDesktopLibrarySync(isAuthenticated ? user : null);
+    const checkAccess = async () => {
+      if (isAuthenticated && user) {
+        try {
+          const accessStatus = await verifyAscendAccess();
+          const hasAccess =
+            accessStatus.hasAccess ||
+            accessStatus.isSubscribed ||
+            accessStatus.isVerified;
+
+          console.log(
+            "[App] Initializing download sync service for user:",
+            user.uid,
+            "Ascend access:",
+            hasAccess
+          );
+          initializeDownloadSync(user, hasAccess);
+          initializeFavoritesSync(user, hasAccess);
+          initializeAchievementsSync(user, hasAccess);
+          initializeWishlistWatch(user, hasAccess);
+        } catch (error) {
+          console.error("[App] Error checking Ascend access:", error);
+          stopDownloadSync();
+          stopFavoritesSync();
+          stopAchievementsSync();
+          stopWishlistWatch();
+        }
+      } else {
+        stopDownloadSync();
+        stopFavoritesSync();
+        stopAchievementsSync();
+        stopWishlistWatch();
+      }
+    };
+
+    checkAccess();
+
+    return () => {
+      stopDesktopLibrarySync();
+      stopDownloadSync();
+      stopFavoritesSync();
+      stopAchievementsSync();
+      stopWishlistWatch();
+    };
+  }, [isAuthenticated, user]);
+
+  return null;
+};
+
+// Initialize global search system
+const SearchInitializer = () => {
+  useGlobalSearch();
+  useGameIndexSearch();
+  useSettingsSearch();
+  useLibrarySearch();
+  return null;
+};
+
+// Check for new messages and show notifications
+const MessageNotificationChecker = () => {
+  const { t } = useTranslation();
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const lastCheckedRef = useRef({});
+  const checkIntervalRef = useRef(null);
+  const pathnameRef = useRef(location.pathname);
+  pathnameRef.current = location.pathname;
+
+  useEffect(() => {
+    if (!user?.uid) {
+      // Clear interval if user logs out
+      if (checkIntervalRef.current) {
+        clearInterval(checkIntervalRef.current);
+        checkIntervalRef.current = null;
+      }
+      lastCheckedRef.current = {};
+      return;
+    }
+
+    const checkForNewMessages = async (isInitialCheck = false) => {
+      try {
+        // Skip notifications if user is on Ascend page (real-time listener handles it)
+        if (pathnameRef.current === "/ascend") {
+          return;
+        }
+
+        const result = await getUnreadMessageCount();
+        if (result.error || result.newMessages.length === 0) return;
+
+        // On the first check after mount/login, just record existing unread
+        // counts as the baseline instead of notifying for messages that were
+        // already unread before we started watching.
+        if (isInitialCheck) {
+          result.newMessages.forEach(msg => {
+            lastCheckedRef.current[msg.conversationId] = msg.unreadCount;
+          });
+          return;
+        }
+
+        // Check for new messages we haven't notified about
+        result.newMessages.forEach(msg => {
+          const lastNotified = lastCheckedRef.current[msg.conversationId] || 0;
+
+          // Only notify if this is a new message (more unread than before)
+          if (msg.unreadCount > lastNotified) {
+            // Show toast notification
+            toast(t("ascend.messages.newMessage", { name: msg.senderName }), {
+              description:
+                msg.messageText?.substring(0, 50) +
+                (msg.messageText?.length > 50 ? "..." : ""),
+              action: {
+                label: t("common.view"),
+                onClick: () => navigate("/ascend"),
+              },
+              duration: 5000,
+            });
+          }
+
+          // Update last checked count
+          lastCheckedRef.current[msg.conversationId] = msg.unreadCount;
+        });
+      } catch (e) {
+        console.error("[MessageNotificationChecker] Error:", e);
+      }
+    };
+
+    // Initial check after a short delay - just establishes the baseline,
+    // doesn't notify for messages that were already unread before this ran
+    const initialTimeout = setTimeout(() => checkForNewMessages(true), 5000);
+
+    // Reduce polling frequency from 30s to 60s to reduce CPU usage
+    checkIntervalRef.current = setInterval(checkForNewMessages, 60000);
+
+    return () => {
+      clearTimeout(initialTimeout);
+      if (checkIntervalRef.current) {
+        clearInterval(checkIntervalRef.current);
+      }
+    };
+  }, [user?.uid, t, navigate]);
+
+  return null;
+};
+
+const AppRoutes = () => {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { settings } = useSettings();
+  const { user } = useAuth();
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(null);
+  const [isNewInstall, setIsNewInstall] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasInitialRedirect, setHasInitialRedirect] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isInstalling, setIsInstalling] = useState(false);
+  // Where the menu bar logo was when Install and Restart was clicked, so the
+  // update overlay's logo can fly out of it
+  const [installLogoFrom, setInstallLogoFrom] = useState(null);
+  const iconData = useAppIcon();
+  const [splashDone, setSplashDone] = useState(false);
+  // The app renders under the splash once initialized; the splash only leaves
+  // after the first page has finished loading its data and images.
+  const [firstPageReady, setFirstPageReady] = useState(false);
+  // Startup dialogs wait for the splash to leave and the first page's entrance
+  // animations to play, so they never pop in over a half-loaded app.
+  const [startupSettled, setStartupSettled] = useState(false);
+  const [showSupportDialog, setShowSupportDialog] = useState(false);
+  const [showPlatformWarning, setShowPlatformWarning] = useState(false);
+  const [isBrokenVersion, setIsBrokenVersion] = useState(false);
+  const [showFirstIndexDialog, setShowFirstIndexDialog] = useState(false);
+  const [showBranchWelcome, setShowBranchWelcome] = useState(false);
+  const [missingAppFiles, setMissingAppFiles] = useState([]);
+  const [missingDllInfo, setMissingDllInfo] = useState(null);
+  const [appBranch, setAppBranch] = useState(null);
+  const [liveUpdateOffer, setLiveUpdateOffer] = useState(null);
+  const location = useLocation();
+  const hasChecked = useRef(false);
+  const loadStartTime = useRef(Date.now());
+  const hasShownUpdateNotification = useRef(false);
+  const hasShownUpdateReadyNotification = useRef(false);
+  const protocolHandlerRef = useRef(null);
+  const unsubscribeProtocolRef = useRef(null);
+  const unsubscribePlayRef = useRef(null);
+  const lastHandledGameProtocolRef = useRef({ gameID: null, time: 0 });
+
+  useEffect(() => startAnalyticsListeners(), []);
+
+  // A game was blocked from launching because an online-fix / crack DLL the
+  // install expects is gone (antivirus usually). Surface the explain-and-guide
+  // dialog globally so it works wherever the launch was triggered.
+  useEffect(() => {
+    return window.electron?.onGameDllMissing?.((_, data) => {
+      if (data?.game) setMissingDllInfo(data);
+    });
+  }, []);
+
+  useEffect(() => {
+    trackScreen(location.pathname);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    identifyUser(user);
+  }, [user?.uid]);
+
+  const ensureMinLoadingTime = () => {
+    const currentTime = Date.now();
+    const elapsedTime = currentTime - loadStartTime.current;
+    const minLoadingTime = 1000;
+
+    if (elapsedTime < minLoadingTime) {
+      return new Promise(resolve => setTimeout(resolve, minLoadingTime - elapsedTime));
+    }
+    return Promise.resolve();
+  };
+
+  const checkWelcomeStatus = async () => {
+    try {
+      console.log("Checking welcome status...");
+      const isNew = await window.electron.isNew();
+      console.log("Is new install:", isNew);
+      const isV7 = await window.electron.isV7();
+      console.log("Is V7:", isV7);
+
+      setIsNewInstall(isNew);
+      setWelcomeData({ isNew, isV7 });
+      setShowWelcome(isNew || !isV7);
+
+      console.log("Welcome check:", { isNew, isV7, shouldShow: isNew || !isV7 });
+      return { isNew, isV7 };
+    } catch (error) {
+      console.error("Error checking welcome status:", error);
+      setShowWelcome(false);
+      return null;
+    }
+  };
+
+  const checkAndSetWelcomeStatus = async () => {
+    const hasLaunched = await window.electron.hasLaunched();
+    if (!hasLaunched) {
+      await checkWelcomeStatus();
+      // Update launch count since this is the first launch
+      const count = await window.electron.updateLaunchCount();
+      if (count === 5) {
+        setTimeout(() => {
+          setShowSupportDialog(true);
+        }, 4000);
+      }
+    } else {
+      const isV7 = await window.electron.isV7();
+      setShowWelcome(!isV7);
+      setWelcomeData({ isNew: false, isV7 });
+    }
+    return hasLaunched;
+  };
+
+  const [welcomeData, setWelcomeData] = useState(null);
+  const [showWatcherWarn, setShowWatcherWarn] = useState(false);
+  const [showChangelog, setShowChangelog] = useState(false);
+  const [changelogPreviewVersion, setChangelogPreviewVersion] = useState(null);
+
+  // Dev only: window.showChangelog("12.0.0") opens the changelog for any version, drafts included
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    window.showChangelog = (version = __APP_VERSION__) => {
+      setChangelogPreviewVersion(version);
+      setShowChangelog(true);
+    };
+    return () => {
+      delete window.showChangelog;
+    };
+  }, []);
+
+  // Long-time users (a month installed, 15+ launches) are asked once for a
+  // testimonial, after the changelog and any other startup dialogs are done.
+  const [testimonialInstalledAt, setTestimonialInstalledAt] = useState(null);
+  const [showTestimonial, setShowTestimonial] = useState(false);
+  useEffect(() => {
+    if (!startupSettled) return;
+    const checkTestimonial = async () => {
+      const [shown, installedAt, launchCount] = await Promise.all([
+        window.electron.getTimestampValue("hasShownTestimonial"),
+        window.electron.getTimestampValue("timestamp"),
+        window.electron.getLaunchCount(),
+      ]);
+      if (shown || !installedAt || launchCount < TESTIMONIAL_MIN_LAUNCHES) return;
+      if (Date.now() - installedAt < TESTIMONIAL_MIN_AGE_MS) return;
+      setTestimonialInstalledAt(installedAt);
+    };
+    checkTestimonial().catch(error =>
+      console.error("Error checking testimonial eligibility:", error)
+    );
+  }, [startupSettled]);
+
+  // Dev only: window.showTestimonial() opens the testimonial dialog regardless of eligibility
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    window.showTestimonial = () => {
+      setTestimonialInstalledAt(Date.now() - TESTIMONIAL_MIN_AGE_MS);
+      setShowTestimonial(true);
+    };
+    return () => {
+      delete window.showTestimonial;
+    };
+  }, []);
+
+  const startupDialogOpen =
+    showChangelog ||
+    showSupportDialog ||
+    showWatcherWarn ||
+    showBranchWelcome ||
+    showPlatformWarning ||
+    isBrokenVersion ||
+    showFirstIndexDialog ||
+    missingAppFiles.length > 0;
+  useEffect(() => {
+    if (!testimonialInstalledAt || showTestimonial || startupDialogOpen) return;
+    const timer = setTimeout(() => {
+      setShowTestimonial(true);
+      window.electron.setTimestampValue("hasShownTestimonial", true);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [testimonialInstalledAt, showTestimonial, startupDialogOpen]);
+  useEffect(() => {
+    const initializeApp = async () => {
+      if (hasChecked.current) return;
+      hasChecked.current = true;
+
+      console.log("Starting app initialization...");
+
+      // Check if running in admin mode
+      const hasAdmin = await window.electron.hasAdmin();
+      setIsAdmin(hasAdmin);
+      if (hasAdmin) {
+        console.log("Running in admin mode - blocking app usage");
+        await ensureMinLoadingTime();
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        // Set up game protocol URL listener
+        const handleGameProtocol = async (event, payload) => {
+          const gameID = typeof payload === "string" ? payload : payload?.gameID;
+          console.log("Received game protocol URL with gameID:", gameID);
+          if (!gameID) {
+            console.error("No gameID received in game protocol URL");
+            return false;
+          }
+
+          // Clean the gameID by removing any query parameters or slashes
+          const cleanGameID = String(gameID).replace(/[?/]/g, "").trim();
+          window.electron?.acknowledgeGameUrl?.(cleanGameID);
+          if (!cleanGameID) {
+            console.error("Empty gameID after cleaning:", gameID);
+            return false;
+          }
+
+          const now = Date.now();
+          if (
+            lastHandledGameProtocolRef.current.gameID === cleanGameID &&
+            now - lastHandledGameProtocolRef.current.time < 2000
+          ) {
+            return true;
+          }
+          lastHandledGameProtocolRef.current = { gameID: cleanGameID, time: now };
+
+          // Prevent the default landing page redirect from overriding the download page
+          setHasInitialRedirect(true);
+
+          try {
+            console.log("Looking up game with cleaned gameID:", cleanGameID);
+
+            // Find the game using the efficient lookup service
+            const game = await gameService.findGameByGameID(cleanGameID);
+            console.log("Found game:", game);
+
+            if (!game) {
+              toast.error("Game not found", {
+                description: "The requested game could not be found.",
+              });
+              return false;
+            }
+
+            console.log("Navigating to download page with game:", game.game);
+            // Navigate to the download page with the game data in the expected format
+            navigate("/download", {
+              replace: true, // Use replace to avoid browser back button issues
+              state: {
+                gameData: {
+                  ...game, // Pass all game data directly
+                  download_links: game.download_links || {}, // Ensure download_links exists
+                },
+              },
+            });
+            return true;
+          } catch (error) {
+            console.error("Error handling game protocol:", error);
+            toast.error("Error", {
+              description: "Failed to load game information.",
+            });
+            return false;
+          }
+        };
+
+        // Store the handler in the ref so we can access it in cleanup
+        protocolHandlerRef.current = handleGameProtocol;
+
+        // Register the protocol listener using the named preload API
+        unsubscribeProtocolRef.current = window.electron.onProtocolGameUrl(
+          protocolHandlerRef.current
+        );
+
+        // macOS shortcuts start an installed game through an ascendara://play link
+        const handlePlayProtocol = async (_event, payload) => {
+          const game = payload?.game;
+          if (!game) return;
+          window.electron.acknowledgePlayGame?.(game);
+          const [installed, custom] = await Promise.all([
+            window.electron.getGames().catch(() => []),
+            window.electron.getCustomGames().catch(() => []),
+          ]);
+          const isInstalled = (installed || []).some(entry => entry.game === game);
+          const isCustom = (custom || []).some(
+            entry => (entry.game || entry.name) === game
+          );
+          if (!isInstalled && !isCustom) {
+            console.warn("Play link for a game that is not installed:", game);
+            return;
+          }
+          await window.electron.playGame(game, !isInstalled && isCustom);
+        };
+        unsubscribePlayRef.current =
+          window.electron.onProtocolPlayGame?.(handlePlayProtocol);
+        try {
+          const pendingPlays = await window.electron.getPendingPlayGames?.();
+          for (const game of pendingPlays || []) {
+            await handlePlayProtocol(null, { game });
+          }
+        } catch (error) {
+          console.error("Error reading pending play links:", error);
+        }
+
+        // Drain any game protocol URLs that arrived while the app was starting up
+        try {
+          const pendingGameIds = await window.electron.getPendingGameUrls?.();
+          if (Array.isArray(pendingGameIds) && pendingGameIds.length > 0) {
+            for (const pendingId of pendingGameIds) {
+              await handleGameProtocol(null, { gameID: pendingId });
+            }
+          }
+        } catch (error) {
+          console.error("Error reading pending game protocol URLs:", error);
+        }
+
+        // Check if we're forcing a loading screen from settings
+        const forceLoading = localStorage.getItem("forceLoading");
+        if (forceLoading) {
+          localStorage.removeItem("forceLoading");
+          await ensureMinLoadingTime();
+          setIsLoading(false);
+          return;
+        }
+
+        // Check if we're finishing up from settings
+        const finishingUp = localStorage.getItem("finishingUp");
+        if (finishingUp) {
+          localStorage.removeItem("finishingUp");
+          setTimeout(async () => {
+            await window.electron.setTimestampValue("isUpdating", false);
+            await window.electron.deleteInstaller();
+            setIsUpdating(false);
+            window.location.reload();
+          }, 2000);
+          return;
+        }
+
+        // Check if we're finishing up an update
+        const isUpdatingValue = await window.electron.getTimestampValue("isUpdating");
+        setIsUpdating(isUpdatingValue);
+
+        if (isUpdatingValue) {
+          // Clear the updating flag after a delay
+          setTimeout(async () => {
+            // A failed check here must never leave the app on the updating screen
+            try {
+              await window.electron.setTimestampValue("isUpdating", false);
+              const wasRepair = await window.electron.getTimestampValue("isRepairing");
+              if (wasRepair)
+                await window.electron.setTimestampValue("isRepairing", false);
+              await checkAndSetWelcomeStatus();
+              // Only show changelog on live branch
+              const branch = await window.electron.getBranch();
+              if (branch === "live" && !wasRepair) {
+                setShowChangelog(true);
+              }
+
+              // Use testing version for non-live branches
+              let versionToShow = __APP_VERSION__;
+              if (branch !== "live") {
+                const testingVer = await window.electron.getTestingVersion();
+                if (testingVer) {
+                  versionToShow = testingVer;
+                }
+              }
+
+              if (wasRepair) {
+                toast(t("app.repair.complete"), {
+                  description: t("app.repair.completeDesc"),
+                  duration: 10000,
+                  id: "update-completed",
+                });
+              } else {
+                toast(t("app.toasts.justUpdated"), {
+                  description: t("app.toasts.justUpdatedDesc", {
+                    version: versionToShow,
+                  }),
+                  duration: 10000,
+                  id: "update-completed",
+                });
+              }
+            } catch (error) {
+              console.error("Error finishing update startup:", error);
+            } finally {
+              setIsUpdating(false);
+              setIsLoading(false);
+            }
+          }, 2000);
+          return;
+        }
+
+        const hasLaunched = await checkAndSetWelcomeStatus();
+        // hasLaunched is false on every cold start, so gate on the welcome
+        // flow instead (it sets the index up itself)
+        const welcomeShowing =
+          !(await window.electron.isV7()) ||
+          (!hasLaunched && (await window.electron.isNew()));
+        if (!welcomeShowing) {
+          // Pick up a newer game index while the splash is still up, so Home
+          // doesn't load the old one and then refresh in front of the user.
+          const bootSync = await syncIndexDuringBoot(await window.electron.getSettings());
+          if (bootSync?.updated) gameService.clearMemoryCache();
+        }
+        const isWindows = await window.electron.isOnWindows();
+        if (hasLaunched && isWindows) {
+          const isWatchdogActive = await window.electron.isWatchdogRunning();
+          if (!isWatchdogActive) {
+            await ensureMinLoadingTime();
+            setIsLoading(false);
+            setShowWatcherWarn(true);
+            return;
+          }
+        }
+
+        // Always ensure loading is set to false after initialization completes
+        await ensureMinLoadingTime();
+        setIsLoading(false);
+      } catch (error) {
+        console.error("Error in app initialization:", error);
+        await ensureMinLoadingTime();
+        setIsLoading(false);
+        setShowWelcome(false);
+      }
+    };
+
+    initializeApp();
+
+    // Cleanup function to ensure loading states are reset and listeners are removed
+    return () => {
+      setIsLoading(false);
+      setIsUpdating(false);
+      setIsInstalling(false);
+      if (unsubscribePlayRef.current) {
+        unsubscribePlayRef.current();
+        unsubscribePlayRef.current = null;
+      }
+      if (unsubscribeProtocolRef.current) {
+        unsubscribeProtocolRef.current();
+        unsubscribeProtocolRef.current = null;
+      }
+    };
+  }, []);
+
+  // Signed in: load Ascend's overview in the background once the app is up,
+  // so opening Ascend shows it straight away
+  useEffect(() => {
+    if (!splashDone) return;
+    const timer = setTimeout(() => setStartupSettled(true), 600);
+    return () => clearTimeout(timer);
+  }, [splashDone]);
+
+  useEffect(() => {
+    if (!firstPageReady || !user?.uid) return;
+    if (!user.emailVerified && user.providerData?.[0]?.providerId === "password") return;
+    import("@/pages/ascend/useAscendPage")
+      .then(module => module.warmAscendOverview(user.uid))
+      .catch(() => {});
+  }, [firstPageReady, user?.uid]);
+
+  useEffect(() => {
+    if (isLoading || isUpdating || isInstalling) return;
+    let cancelled = false;
+    whenBootReady().then(() => {
+      if (!cancelled) setFirstPageReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoading, isUpdating, isInstalling]);
+
+  useEffect(() => {
+    // Remove the initial loader once React is ready
+    if (!isLoading && !isUpdating && !isInstalling) {
+      const loader = document.getElementById("initial-loader");
+      if (loader) {
+        loader.style.transition = "opacity 0.3s";
+        loader.style.opacity = "0";
+        setTimeout(() => {
+          loader.style.display = "none";
+        }, 300);
+      }
+    }
+  }, [isLoading, isUpdating, isInstalling]);
+
+  const handleWelcomeComplete = async (withTour = false) => {
+    setWelcomeData({ isNew: false, isV7: true });
+    enablePageTours();
+
+    // Persist tour intent via sessionStorage instead of a query param.
+    // Query params are fragile here because the interim renders between
+    // `setShowWelcome(false)` and `navigate(...)` can trip one of the
+    // redirect guards ("/welcome -> /" or default landing page) and strip
+    // the search string before Home ever reads it.
+    try {
+      if (withTour) {
+        sessionStorage.setItem("ascendara:startTour", "1");
+      } else {
+        sessionStorage.removeItem("ascendara:startTour");
+      }
+    } catch (e) {
+      console.warn("Failed to persist tour intent:", e);
+    }
+
+    navigate("/", { replace: true });
+    setShowWelcome(false);
+  };
+
+  // Keeps the cached version status fresh so pages like Ascend don't
+  // have to check on every visit
+  useEffect(() => {
+    startBackgroundUpdateChecks();
+  }, []);
+
+  useEffect(() => {
+    const checkVersion = async () => {
+      const isBroken = await window.electron.isBrokenVersion();
+      console.log("Is broken version:", isBroken);
+      setIsBrokenVersion(isBroken);
+    };
+    checkVersion();
+  }, []);
+
+  // Developer tools can replay the welcome flow from Settings
+  useEffect(() => {
+    const showWelcomeFlow = () => {
+      setIsNewInstall(true);
+      setWelcomeData({ isNew: true, isV7: true });
+      navigate("/welcome", { replace: true });
+      setShowWelcome(true);
+    };
+    window.addEventListener("ascendara:show-welcome", showWelcomeFlow);
+    return () => window.removeEventListener("ascendara:show-welcome", showWelcomeFlow);
+  }, [navigate]);
+
+  // Check if user needs to set up game index for the first time
+  useEffect(() => {
+    const checkFirstIndex = async () => {
+      // Only check after loading is done and welcome is not showing
+      if (isLoading || showWelcome) return;
+
+      try {
+        const hasIndexBefore = await window.electron.getTimestampValue("hasIndexBefore");
+        console.log("Has indexed before:", hasIndexBefore);
+
+        // If hasIndexBefore doesn't exist or is false, show the dialog
+        if (!hasIndexBefore) {
+          // Small delay to let other dialogs settle
+          setTimeout(() => {
+            setShowFirstIndexDialog(true);
+          }, 1000);
+        }
+      } catch (error) {
+        console.error("Error checking first index status:", error);
+      }
+    };
+    checkFirstIndex();
+  }, [isLoading, showWelcome]);
+
+  // Check for branch welcome dialog (public-testing or experimental)
+  // Antivirus can quarantine a helper program after install; offer a repair
+  useEffect(() => {
+    if (isLoading) return;
+    window.electron
+      .getMissingAppFiles?.()
+      .then(files => files?.length && setMissingAppFiles(files))
+      .catch(error => console.error("Error checking app files:", error));
+  }, [isLoading]);
+
+  useEffect(() => {
+    const checkBranchWelcome = async () => {
+      // Only check after loading is done and welcome is not showing
+      if (isLoading || showWelcome) return;
+
+      try {
+        const branch = await window.electron.getBranch();
+        setAppBranch(branch);
+
+        // Only show for public-testing or experimental branches
+        if (branch === "public-testing" || branch === "experimental") {
+          // Check if we've already shown this dialog for this branch
+          const hasShown = localStorage.getItem(`branch-welcome-${branch}-shown`);
+
+          if (!hasShown) {
+            // Small delay to let other dialogs settle
+            setTimeout(() => {
+              setShowBranchWelcome(true);
+            }, 1500);
+          }
+        }
+      } catch (error) {
+        console.error("Error checking branch welcome status:", error);
+      }
+    };
+    checkBranchWelcome();
+  }, [isLoading, showWelcome]);
+
+  // Shows the update overlay, its logo flying out of the menu bar logo
+  const showInstallingOverlay = () => {
+    const logoRect = document.querySelector("[data-app-logo]")?.getBoundingClientRect();
+    setInstallLogoFrom(logoRect?.width > 0 ? logoRect : "left");
+    setIsInstalling(true);
+  };
+
+  const handleInstallAndRestart = async () => {
+    markUpdateInstalling();
+    showInstallingOverlay();
+    try {
+      await window.electron.setTimestampValue("isUpdating", true);
+      setIsUpdating(true);
+      const result = await window.electron.updateAscendara();
+      if (!result?.success) {
+        throw new Error(
+          result?.error || "The update could not be installed. Please retry."
+        );
+      }
+    } catch (error) {
+      markUpdateInstallFailed();
+      setIsUpdating(false);
+      setIsInstalling(false);
+      await window.electron.setTimestampValue("isUpdating", false);
+      toast.error(error.message);
+    }
+  };
+
+  useEffect(() => {
+    // Don't redirect to the default landing page if the user just finished
+    // the welcome flow and asked for the tour - the tour lives on Home and
+    // is triggered by the `?tour=true` query param, which would otherwise
+    // be stripped by a replace navigation here.
+    const tourActive = location.search?.includes("tour=true");
+
+    if (
+      !isLoading &&
+      location.pathname === "/" &&
+      !showWelcome &&
+      !tourActive &&
+      settings?.defaultOpenPage &&
+      settings.defaultOpenPage !== "home" &&
+      !hasInitialRedirect
+    ) {
+      console.log(`Redirecting to default landing page: ${settings.defaultOpenPage}`);
+      setHasInitialRedirect(true);
+      navigate(`/${settings.defaultOpenPage}`, { replace: true });
+    }
+  }, [
+    isLoading,
+    location.pathname,
+    location.search,
+    showWelcome,
+    settings?.defaultOpenPage,
+    hasInitialRedirect,
+    navigate,
+  ]);
+
+  // Settings' screen trigger: the update-ready toast, whose button only
+  // previews the installing screen and then reloads
+  useEffect(() => {
+    const previewUpdateToast = () => {
+      toast(t("app.toasts.updateReady"), {
+        description: t("app.toasts.updateReadyDesc"),
+        action: {
+          label: t("app.toasts.installAndRestart"),
+          onClick: () => {
+            showInstallingOverlay();
+            setTimeout(() => window.location.reload(), 3000);
+          },
+        },
+        duration: Infinity,
+        id: "update-ready-preview",
+      });
+    };
+    window.addEventListener("ascendara:preview-update-toast", previewUpdateToast);
+    return () =>
+      window.removeEventListener("ascendara:preview-update-toast", previewUpdateToast);
+  }, [t]);
+
+  // Version check effect
+  useEffect(() => {
+    if (showWelcome) return;
+    let isSubscribed = true;
+    let updateRequested = false;
+
+    const requestUpdate = async () => {
+      if (updateRequested) return;
+      updateRequested = true;
+      toast.dismiss("update-available");
+      try {
+        if (getUpdateStatus().phase === UPDATE_PHASES.READY) {
+          // A manual request must be able to reopen a dismissed install prompt.
+          hasShownUpdateReadyNotification.current = false;
+          await updateReadyHandler();
+        } else {
+          await window.electron.downloadUpdate();
+        }
+      } catch (error) {
+        console.error("Failed to request app update:", error);
+        toast.error(t("app.toasts.updateFailed"));
+      } finally {
+        updateRequested = false;
+      }
+    };
+
+    const showUpdateAvailableNotification = async () => {
+      if (!isSubscribed || hasShownUpdateNotification.current) return;
+
+      const branch = await window.electron.getBranch();
+      if (!isSubscribed || hasShownUpdateNotification.current) return;
+
+      hasShownUpdateNotification.current = true;
+
+      let title, description;
+      if (branch === "public-testing") {
+        title = t("app.toasts.outOfDatePublicTesting");
+        description = t("app.toasts.outOfDatePublicTestingDesc");
+      } else if (branch === "experimental") {
+        title = t("app.toasts.outOfDateExperimental");
+        description = t("app.toasts.outOfDateExperimentalDesc");
+      } else {
+        title = t("app.toasts.outOfDate");
+        description = t("app.toasts.outOfDateDesc");
+      }
+
+      toast(title, {
+        description: description,
+        action: {
+          label: t("app.toasts.updateNow"),
+          onClick: requestUpdate,
+        },
+        duration: 10000,
+        id: "update-available",
+      });
+    };
+
+    const checkVersionAndSetupUpdates = async () => {
+      try {
+        const settings = await window.electron.getSettings();
+        await checkForUpdates();
+        const liveOffer = await window.electron.getLiveUpdateOffer?.();
+        if (isSubscribed && liveOffer && !isLiveUpdateOfferDismissed(liveOffer)) {
+          setLiveUpdateOffer(liveOffer);
+        }
+        // Builds that cannot auto-update always get the manual update prompt.
+        const automaticUpdateCapability =
+          await window.electron.getAutomaticUpdateCapability();
+
+        if (
+          getUpdateStatus().phase === UPDATE_PHASES.AVAILABLE &&
+          (!settings.autoUpdate || !automaticUpdateCapability.supported)
+        ) {
+          await showUpdateAvailableNotification();
+        }
+      } catch (error) {
+        console.error("Error checking version:", error);
+      }
+    };
+
+    const updateReadyHandler = async () => {
+      if (!isSubscribed || hasShownUpdateReadyNotification.current) return;
+
+      hasShownUpdateReadyNotification.current = true;
+
+      // Get branch for branch-specific messages
+      const branch = await window.electron.getBranch();
+
+      let title, description;
+      if (branch === "public-testing") {
+        title = t("app.toasts.updateReadyPublicTesting");
+        description = t("app.toasts.updateReadyPublicTestingDesc");
+      } else if (branch === "experimental") {
+        title = t("app.toasts.updateReadyExperimental");
+        description = t("app.toasts.updateReadyExperimentalDesc");
+      } else {
+        title = t("app.toasts.updateReady");
+        description = t("app.toasts.updateReadyDesc");
+      }
+
+      toast(title, {
+        description: description,
+        action: {
+          label: t("app.toasts.installAndRestart"),
+          onClick: handleInstallAndRestart,
+        },
+        duration: Infinity,
+        id: "update-ready",
+      });
+    };
+
+    const handleUpdateStatus = nextStatus => {
+      if (nextStatus.phase === UPDATE_PHASES.READY) {
+        void updateReadyHandler();
+      }
+    };
+    const unsubscribeUpdateStatus = subscribeToUpdateStatus(handleUpdateStatus);
+    handleUpdateStatus(getUpdateStatus());
+
+    // The main process emits this when an update exists but background transfer
+    // is not allowed or possible (including unreadable settings). Subscribe
+    // before the version check so that decision cannot be missed.
+    const unsubscribeUpdateAvailable = window.electron.onUpdateAvailable?.(() => {
+      void showUpdateAvailableNotification();
+    });
+
+    checkVersionAndSetupUpdates();
+
+    window.addEventListener("request-app-update", requestUpdate);
+    const unsubscribeUpdateError = window.electron.onUpdateError?.((_event, message) => {
+      if (!isSubscribed) return;
+      toast.error(t("app.toasts.updateFailed"), {
+        description: message || t("app.toasts.updateFailedDesc"),
+        id: "update-failed",
+      });
+    });
+
+    return () => {
+      isSubscribed = false;
+      unsubscribeUpdateStatus();
+      window.removeEventListener("request-app-update", requestUpdate);
+      unsubscribeUpdateAvailable?.();
+      unsubscribeUpdateError?.();
+    };
+  }, [showWelcome]);
+
+  if (isAdmin) {
+    return <AdminWarningScreen />;
+  }
+
+  if (isInstalling) {
+    return <UpdateOverlay flyFrom={installLogoFrom} />;
+  }
+
+  // Same key in both trees so React keeps the splash mounted (no remount jump)
+  // when loading finishes and the app renders underneath it.
+  const splash = !splashDone ? (
+    <StartupSplash
+      key="startup-splash"
+      iconData={iconData}
+      exiting={!isLoading && !isUpdating && firstPageReady}
+      onDone={() => {
+        setSplashDone(true);
+        markBootComplete();
+      }}
+      fallback={<PageLoading />}
+    />
+  ) : null;
+
+  if (isLoading || isUpdating) {
+    return <>{splash}</>;
+  }
+
+  if (showWelcome === null && isLoading) {
+    return null;
+  }
+
+  // If showWelcome is null but we're not loading, default to false to prevent blank screen
+  const effectiveShowWelcome = showWelcome ?? false;
+
+  if (location.pathname === "/welcome" && !effectiveShowWelcome) {
+    // Preserve the current query string (e.g. ?tour=true) so the post-welcome
+    // tour can still activate on Home after the redirect.
+    return (
+      <>
+        {splash}
+        <Navigate to={{ pathname: "/", search: location.search }} replace />
+      </>
+    );
+  }
+
+  if (location.pathname === "/" && effectiveShowWelcome) {
+    return (
+      <>
+        {splash}
+        <PageLoading />
+        <Navigate to="/welcome" replace />
+      </>
+    );
+  }
+
+  return (
+    <>
+      {splash}
+      <MenuBar />
+      {!effectiveShowWelcome && <BrowserDownloadHandler />}
+      {!effectiveShowWelcome && <IndexRecoveryNotice />}
+      {effectiveShowWelcome ? (
+        <div className="min-h-screen bg-background text-foreground">
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+          >
+            <Routes>
+              <Route path="/extralanguages" element={<ExtraLanguages />} />
+              <Route
+                path="*"
+                element={
+                  <Welcome
+                    isNewInstall={isNewInstall}
+                    welcomeData={welcomeData}
+                    onComplete={handleWelcomeComplete}
+                  />
+                }
+              />
+            </Routes>
+          </motion.div>
+        </div>
+      ) : (
+        <Routes location={location} key={user?.uid || "logged-out"}>
+          <Route path="bigpicture" element={<BigPicture />} />
+          <Route path="/" element={<Layout />}>
+            <Route index element={<Home />} />
+            <Route path="search" element={null} />
+            <Route path="library" element={<Library />} />
+            <Route path="retro" element={<RetroRedirect />} />
+            <Route path="folderview/:folderName" element={<FolderView />} />
+            <Route path="gamescreen" element={<GameScreen />} />
+            <Route path="downloads" element={<Downloads />} />
+            <Route path="debriddownloads" element={<DebridDownloads />} />
+            <Route
+              path="realdebriddownloads"
+              element={<Navigate to="/debriddownloads?service=realdebrid" replace />}
+            />
+            <Route
+              path="torboxdownloads"
+              element={<Navigate to="/debriddownloads?service=torbox" replace />}
+            />
+            <Route path="settings" element={<Settings />} />
+            <Route path="themes" element={<ThemeStudio />} />
+            <Route path="sidecaranddependencies" element={<SidecarAndDependencies />} />
+            <Route path="sources" element={<ExternalSources />} />
+            {/* The local index moved into Settings; keep old links working */}
+            <Route
+              path="localrefresh"
+              element={
+                <Navigate to="/settings" replace state={{ scrollTo: "game-index" }} />
+              }
+            />
+            <Route path="profile" element={<Profile />} />
+            <Route path="ascend" element={<Ascend />} />
+            <Route path="workshopdownloader" element={<WorkshopDownloader />} />
+            <Route
+              path="download"
+              element={
+                <DownloadPage key={location.state?.gameData?.game || "download"} />
+              }
+            />
+            <Route path="extralanguages" element={<ExtraLanguages />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      )}
+      {startupSettled && showSupportDialog && (
+        <SupportDialog onClose={() => setShowSupportDialog(false)} />
+      )}
+      {showTestimonial && (
+        <TestimonialDialog
+          installedAt={testimonialInstalledAt}
+          onClose={() => {
+            setShowTestimonial(false);
+            setTestimonialInstalledAt(null);
+          }}
+        />
+      )}
+      {startupSettled && showPlatformWarning && (
+        <PlatformWarningDialog onClose={() => setShowPlatformWarning(false)} />
+      )}
+      {startupSettled && isBrokenVersion && (
+        <BrokenVersionDialog onClose={() => setIsBrokenVersion(false)} />
+      )}
+      {startupSettled && showFirstIndexDialog && (
+        <FirstIndexDialog onClose={() => setShowFirstIndexDialog(false)} />
+      )}
+      <RepairAscendaraDialog
+        open={startupSettled && missingAppFiles.length > 0}
+        onOpenChange={open => !open && setMissingAppFiles([])}
+        missingFiles={missingAppFiles}
+      />
+      <BranchWelcomeDialog
+        branch={appBranch}
+        open={startupSettled && showBranchWelcome}
+        onOpenChange={setShowBranchWelcome}
+      />
+      <LiveUpdateOfferDialog
+        branch={appBranch}
+        version={liveUpdateOffer}
+        open={startupSettled && !!appBranch && !!liveUpdateOffer && !showBranchWelcome}
+        onOpenChange={open => !open && setLiveUpdateOffer(null)}
+      />
+      <WatcherWarnDialog
+        open={startupSettled && showWatcherWarn}
+        onOpenChange={setShowWatcherWarn}
+      />
+      <ChangelogDialog
+        open={startupSettled && showChangelog}
+        onOpenChange={setShowChangelog}
+        currentVersion={changelogPreviewVersion || __APP_VERSION__}
+        includeDrafts={!!changelogPreviewVersion}
+      />
+      <MissingDllDialog
+        open={!!missingDllInfo}
+        info={missingDllInfo}
+        onClose={() => setMissingDllInfo(null)}
+        t={i18n.t.bind(i18n)}
+      />
+    </>
+  );
+};
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("Fatal error caught by ErrorBoundary:", error, errorInfo);
+    track("app_crash", {
+      error: `${error?.name || "Error"}: ${error?.message || ""}`,
+      component: errorInfo?.componentStack?.trim().split("\n")[0],
+    });
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-background p-4">
+          <div className="w-full max-w-lg space-y-6 rounded-lg border border-border bg-card p-8 shadow-lg">
+            <div className="space-y-2">
+              <div className="flex justify-center">
+                <AlertTriangle className="h-12 w-12 text-primary" />
+              </div>
+              <h2 className="text-center text-2xl font-bold text-primary">
+                {i18n.t("app.crashScreen.title")}
+              </h2>
+              <p className="text-center text-muted-foreground">
+                {i18n.t("app.crashScreen.description")}
+              </p>
+            </div>
+
+            <div className="space-y-4 rounded-md bg-muted/50 p-4">
+              <p className="text-sm text-muted-foreground">
+                {i18n.t("app.crashScreen.troubleshooting")}
+              </p>
+              <ul className="list-inside list-disc space-y-2 text-sm text-muted-foreground">
+                <li>{i18n.t("app.crashScreen.clearCache")}</li>
+                <li>{i18n.t("app.crashScreen.checkConnection")}</li>
+                <li>{i18n.t("app.crashScreen.contactSupport")}</li>
+              </ul>
+            </div>
+
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => (window.location.href = "/")}
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-secondary ring-offset-background transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+              >
+                <RefreshCwIcon className="h-4 w-4" />
+                {i18n.t("app.crashScreen.reload")}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function ToasterWithTheme() {
+  const { theme } = useTheme();
+  const sonnerTheme = isDarkTheme(theme) ? "dark" : "light";
+
+  return (
+    <Toaster
+      key={theme}
+      theme={sonnerTheme}
+      position="top-right"
+      offset={GLOBAL_TOAST_SAFE_AREA_OFFSET}
+      mobileOffset={GLOBAL_TOAST_SAFE_AREA_OFFSET}
+      toastOptions={{
+        style: {
+          background: "rgb(var(--color-background) / 0.8)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          color: "rgb(var(--color-foreground))",
+          border: "1px solid rgb(var(--color-border) / 0.5)",
+          borderRadius: "12px",
+          padding: "16px",
+          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08)",
+        },
+        descriptionStyle: {
+          color: "rgb(var(--color-muted-foreground))",
+        },
+        actionButtonStyle: {
+          background: "rgb(var(--color-primary))",
+          color: "rgb(var(--color-primary-foreground))",
+          border: "none",
+          borderRadius: "8px",
+          fontWeight: "500",
+        },
+        actionButtonHoverStyle: {
+          background: "rgb(var(--color-primary))",
+          opacity: 0.9,
+        },
+        cancelButtonStyle: {
+          background: "rgb(var(--color-muted) / 0.5)",
+          color: "rgb(var(--color-muted-foreground))",
+          border: "1px solid rgb(var(--color-border) / 0.3)",
+          borderRadius: "8px",
+        },
+        cancelButtonHoverStyle: {
+          background: "rgb(var(--color-muted) / 0.7)",
+        },
+      }}
+    />
+  );
+}
+
+function App() {
+  const { t } = useTranslation();
+  const [playerExpanded, setPlayerExpanded] = useState(false);
+
+  useEffect(() => {
+    // Start server status checks
+    console.log("[App] Initializing server status checks...");
+    const stopStatusCheck = startStatusCheck();
+
+    return () => {
+      console.log("[App] Cleaning up server status checks...");
+      if (stopStatusCheck) stopStatusCheck();
+    };
+  }, []);
+
+  useEffect(() => {
+    const calculateStorageInfo = async () => {
+      try {
+        const downloadDir = await window.electron.getDownloadDirectory();
+        if (downloadDir) {
+          // Pre-fetch both drive space and directory size
+          await Promise.all([
+            window.electron.getDriveSpace(downloadDir),
+            window.electron.getInstalledGamesSize(),
+          ]);
+        }
+      } catch (error) {
+        console.error("[App] Error calculating storage info:", error);
+      }
+    };
+
+    calculateStorageInfo();
+  }, []);
+
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.textContent = `
+      * {
+        -webkit-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+      }
+      
+      input, textarea {
+        -webkit-user-select: text;
+        -ms-user-select: text;
+        user-select: text;
+      }
+    `;
+    document.head.appendChild(style);
+  }, []);
+
+  return (
+    <ErrorBoundary>
+      <ThemeProvider>
+        <LanguageProvider>
+          <SettingsProvider>
+            <DebridBackgroundTasks />
+            <EffectsPreference>
+              <AuthProvider>
+                <TourProvider>
+                  <SearchProvider>
+                    <Router>
+                      <ToasterWithTheme />
+                      <ContextMenu />
+                      <ScrollToTop />
+                      <AscendStatusInitializer />
+                      <DownloadSyncInitializer />
+                      <DownloadStallNotifier />
+                      <WishlistAlertNotifier />
+                      <DiscordRPCTracker />
+                      <UserActivityTracker />
+                      <MessageNotificationChecker />
+                      <TrialWarningChecker />
+                      <GiantBombMigrationWarning />
+                      <AutomaticIndexRefresher />
+                      <ControllerDetectionPrompt />
+                      <CheckoutReturnHandler />
+                      <SearchInitializer />
+                      <GlobalSearch />
+                      <AppRoutes />
+                      <MiniPlayer
+                        expanded={playerExpanded}
+                        onToggleExpand={() => setPlayerExpanded(!playerExpanded)}
+                      />
+                    </Router>
+                  </SearchProvider>
+                </TourProvider>
+              </AuthProvider>
+            </EffectsPreference>
+          </SettingsProvider>
+        </LanguageProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
+  );
+}
+
+export default App;

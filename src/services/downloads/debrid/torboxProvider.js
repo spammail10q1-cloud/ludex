@@ -1,0 +1,105 @@
+import * as api from "../torboxService";
+
+export default {
+  id: "torbox",
+  name: "TorBox",
+  apiKeyUrl: "https://ascendara.app/docs/downloads/torbox-integration",
+  docsUrl: "https://ascendara.app/docs/downloads/torbox-integration",
+  getUserInfo: api.getUserInfo,
+  describeAccount: (user, t) => ({
+    name: user.email,
+    plan:
+      [
+        t("torbox.plan_free"),
+        t("torbox.plan_essential"),
+        t("torbox.plan_pro"),
+        t("torbox.plan_standard"),
+      ][user.plan] || null,
+    expiresAt: user.plan > 0 ? user.premium_expires_at : null,
+    stats: [
+      { label: t("debrid.downloads"), value: user.total_downloaded ?? 0 },
+      { label: t("debrid.data"), value: user.total_bytes_downloaded ?? 0, unit: "bytes" },
+    ],
+  }),
+  apiKeySetting: "torboxApiKey",
+  torrentSetting: "useTorboxForTorrents",
+  prioritizeSetting: "prioritizeTorboxOverSeamless",
+  torrentFallbackSetting: "fallbackToQbittorrentOnTorboxFailure",
+  seamlessHosts: ["gofile", "pixeldrain", "buzzheavier"],
+  downloadsPath: "/torboxdownloads",
+  hostDownloadMode: "cloud",
+  metadataStorageKey: "torboxGameNames",
+  getCachedSupportedHosts: api.getCachedSupportedHosts,
+  getSupportedHosts: api.getSupportedHosts,
+  isSupportedUrl: api.isSupportedUrl,
+  getTorrentGame: entry => entry.gameData,
+  // pickParts(files) returns the parts to download, or null while the user decides.
+  async getTorrentDownload(apiKey, id, pickParts = files => files) {
+    const item = await api.getTorrentInfo(apiKey, id);
+    if (!item) return "missing";
+    if (!item.download_finished || !item.download_present) return null;
+    const files = (item.files || []).map(file => ({
+      id: file.id,
+      // TorBox names start with the torrent's folder; keep the path inside it.
+      name: String(file.name || file.short_name || "").replace(/^[^/]*\//, ""),
+      size: file.size ?? null,
+    }));
+    const chosen = pickParts(files);
+    if (!chosen) return { chooseFrom: files };
+    const link = async fileId => {
+      const result = await api.getDirectDownloadLink(apiKey, id, "torrent", fileId);
+      const url =
+        typeof result === "string"
+          ? result
+          : result.download_url ||
+            result.url ||
+            (typeof result.data === "string"
+              ? result.data
+              : result.data?.download_url || result.data?.url);
+      if (!url) throw new Error("TorBox did not return a torrent download URL.");
+      return url;
+    };
+    // Every part wanted: one zip of the whole torrent, as before.
+    if (chosen.length === files.length)
+      return [{ url: await link(), filename: "torrent.zip", size: null }];
+    const downloads = [];
+    for (const file of chosen)
+      downloads.push({ url: await link(file.id), filename: file.name, size: file.size });
+    return downloads;
+  },
+  async submitMagnet(link, apiKey, game) {
+    const result = await api.createTorrentFromMagnet(link, apiKey, game.game);
+    if (result.torrentId == null) throw new Error("TorBox did not return a torrent ID.");
+    return { id: result.torrentId };
+  },
+  async resolveHost(link, apiKey) {
+    const result = await api.getDirectDownloadLinkFromUrl(link, apiKey);
+    return {
+      id: result.webdownloadId,
+      status: result.status,
+      url: result.url || null,
+      details: result.item,
+    };
+  },
+  serializeMetadata({ result, kind, link, host, game, directory }) {
+    const data = {
+      name: game.game,
+      timestamp: Date.now(),
+      imgUrl: game.imgID || null,
+      provider: host,
+      originalUrl: link,
+      downloadId: result.id,
+      ...(kind === "torrent" ? { torboxType: "torrent", autoHandoff: true } : {}),
+      gameData: {
+        ...game,
+        vr: game.category?.includes("Virtual Reality") || false,
+        additionalDirIndex: directory,
+      },
+      files: result.details?.files || [],
+      status: result.status || "unknown",
+      size: result.details?.size || game.size || "",
+    };
+    const key = kind === "torrent" ? `torrent:${result.id}` : result.id;
+    return { [link]: data, [key]: data };
+  },
+};
