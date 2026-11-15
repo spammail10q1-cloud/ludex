@@ -1,3 +1,5 @@
+![Ludex](assets/ludex.png)
+
 # Ludex
 
 Ludex is a local-first game library, downloader, and launcher for Windows and Linux.
