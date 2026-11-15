@@ -38,6 +38,7 @@ build/icon.ico
 
 # OS and editor files
 *.bat
+!portable/LudexPortable.bat
 .DS_Store
 
 # Project-specific

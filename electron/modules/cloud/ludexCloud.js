@@ -120,6 +120,33 @@ async function githubPost(token, url, data) {
   });
 }
 
+function friendlyError(error) {
+  const status = error.response?.status;
+  if (status === 401) return new Error("GitHub token is invalid or expired");
+  if (status === 403) {
+    return new Error(
+      "GitHub denied the request. The token needs Contents: Read and write (and repo creation) permission."
+    );
+  }
+  if (status === 404) {
+    return new Error(
+      "Repository or snapshot not found. Check the owner, repository, branch and snapshot path."
+    );
+  }
+  return error;
+}
+
+async function ensureCloudRepo(token, config) {
+  try {
+    await githubGet(token, `/repos/${config.owner}/${config.repo}`);
+    return config;
+  } catch (error) {
+    if (error.response?.status !== 404) throw friendlyError(error);
+    const created = await createRepo(token, config.repo, config.owner);
+    return { ...config, ...created };
+  }
+}
+
 async function validateToken(token) {
   if (!token || typeof token !== "string") throw new Error("Missing GitHub token");
   const response = await githubGet(token, "/user");
@@ -468,8 +495,10 @@ async function putRemoteFileBuffer(token, config, filePath, buffer, message) {
 }
 
 async function pushSnapshot(extras = {}) {
-  const config = readConfig();
-  if (!config.token) throw new Error("Connect GitHub first");
+  const stored = readConfig();
+  if (!stored.token) throw new Error("Connect GitHub first");
+  const config = await ensureCloudRepo(stored.token, stored);
+  writeConfig({ ...stored, owner: config.owner, repo: config.repo });
   const snapshot = await buildSnapshot(extras);
   const snapshotPath = config.path || DEFAULT_PATH;
   const savesPath = `${path.posix.dirname(snapshotPath)}/saves.zip`;
@@ -611,19 +640,24 @@ function registerCloudHandlers() {
   });
 
   ipcMain.handle("cloud-connect", async (_, { token, owner, repo, branch, path } = {}) => {
-    const user = await validateToken(token);
-    const current = readConfig();
-    const next = {
-      ...current,
-      token,
-      owner: owner || user.login,
-      repo: repo || "ludex-cloud",
-      branch: branch || "main",
-      path: path || DEFAULT_PATH,
-      lastError: null,
-    };
-    writeConfig(next);
-    return { ...publicConfig(), login: user.login, avatar: user.avatar };
+    try {
+      const user = await validateToken(token);
+      const current = readConfig();
+      let next = {
+        ...current,
+        token,
+        owner: owner || user.login,
+        repo: repo || "ludex-cloud",
+        branch: branch || "main",
+        path: path || DEFAULT_PATH,
+        lastError: null,
+      };
+      next = await ensureCloudRepo(token, next);
+      writeConfig(next);
+      return { ...publicConfig(), login: user.login, avatar: user.avatar };
+    } catch (error) {
+      throw friendlyError(error);
+    }
   });
 
   ipcMain.handle("cloud-create-repo", async (_, { token, name, owner } = {}) => {
@@ -638,9 +672,10 @@ function registerCloudHandlers() {
     try {
       return await pushSnapshot(extras || {});
     } catch (error) {
-      const config = { ...readConfig(), lastError: error.message };
+      const friendly = friendlyError(error);
+      const config = { ...readConfig(), lastError: friendly.message };
       writeConfig(config);
-      throw error;
+      throw friendly;
     }
   });
 
@@ -648,9 +683,10 @@ function registerCloudHandlers() {
     try {
       return await pullSnapshot();
     } catch (error) {
-      const config = { ...readConfig(), lastError: error.message };
+      const friendly = friendlyError(error);
+      const config = { ...readConfig(), lastError: friendly.message };
       writeConfig(config);
-      throw error;
+      throw friendly;
     }
   });
 
