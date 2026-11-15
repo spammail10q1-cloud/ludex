@@ -8,9 +8,23 @@
 
 const fs = require("fs-extra");
 const path = require("path");
+const os = require("os");
 const axios = require("axios");
+const archiver = require("archiver");
+const unzipper = require("unzipper");
+const { spawn } = require("child_process");
 const { app, ipcMain } = require("electron");
 const { getSettingsManager } = require("../core/settings");
+const {
+  getLudusaviPath,
+  linuxCompatDataDir,
+  appDirectory,
+} = require("../core/config");
+const {
+  writeLudusaviConfig,
+  collectAllCustomGames,
+  readCustomSavePaths,
+} = require("../library/ludusavi");
 
 const CONFIG_FILE = () => path.join(app.getPath("userData"), "ludex-cloud.json");
 const DEFAULT_PATH = "ludex-cloud/snapshot.json";
@@ -240,6 +254,141 @@ function listModProfiles() {
   return output;
 }
 
+function resolveLudusaviPath() {
+  if (process.platform === "win32") {
+    const packaged = path.join(appDirectory, "resources", "ludusavi.exe");
+    if (fs.existsSync(packaged)) return packaged;
+    const local = path.join(appDirectory, "ludusavi.exe");
+    if (fs.existsSync(local)) return local;
+    return null;
+  }
+  return getLudusaviPath();
+}
+
+function runProcess(command, args, timeoutMs = 120000) {
+  return new Promise(resolve => {
+    const child = spawn(command, args, {
+      windowsHide: true,
+      // Ludusavi can wait on stdin when it is inherited; close it so headless
+      // restore/backup always runs to completion.
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {}
+      resolve({ code: -1, stdout, stderr: "Ludusavi timed out" });
+    }, timeoutMs);
+    child.stdout?.on("data", data => (stdout += data.toString()));
+    child.stderr?.on("data", data => (stderr += data.toString()));
+    child.on("error", error => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr: error.message });
+    });
+    child.on("close", code => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+function zipDirectory(directory) {
+  return new Promise((resolve, reject) => {
+    const archive = archiver("zip", { zlib: { level: 6 } });
+    const chunks = [];
+    archive.on("data", chunk => chunks.push(chunk));
+    archive.on("warning", error => {
+      if (error.code !== "ENOENT") console.warn("[Cloud] Save zip warning:", error.message);
+    });
+    archive.on("error", reject);
+    archive.on("end", () => resolve(Buffer.concat(chunks)));
+    archive.directory(directory, false);
+    archive.finalize();
+  });
+}
+
+async function backupSavesToZip(games) {
+  const ludusaviPath = resolveLudusaviPath();
+  if (!ludusaviPath || !fs.existsSync(ludusaviPath)) {
+    return { included: false, error: "Ludusavi is not installed" };
+  }
+  const settings = getSettingsManager().getSettings();
+  const staging = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ludex-cloud-saves-"));
+  const configDir = path.join(staging, "config");
+  const backupRoot = path.join(staging, "backups");
+  fs.ensureDirSync(backupRoot);
+  writeLudusaviConfig(configDir, collectAllCustomGames(settings));
+
+  const backedUp = [];
+  for (const game of games || []) {
+    const args = ["--config", configDir, "backup", game.name, "--force", "--api", "--path", backupRoot];
+    if (process.platform === "linux") {
+      const customPaths = [
+        ...readCustomSavePaths(game.name, false, settings),
+        ...readCustomSavePaths(game.name, true, settings),
+      ];
+      if (customPaths.length === 0) {
+        try {
+          const { sanitizeGameSlug } = require("../compat/proton");
+          const prefix = path.join(linuxCompatDataDir, sanitizeGameSlug(game.name), "pfx");
+          if (fs.existsSync(prefix)) args.push("--wine-prefix", prefix);
+        } catch {}
+      }
+    }
+    const result = await runProcess(ludusaviPath, args);
+    if (result.code === 0) backedUp.push(game.name);
+  }
+
+  const hasFiles = fs.existsSync(backupRoot) && fs.readdirSync(backupRoot).length > 0;
+  if (!hasFiles) {
+    await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => {});
+    return { included: false, games: backedUp, error: "No save files were found" };
+  }
+
+  const buffer = await zipDirectory(backupRoot);
+  await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => {});
+  return { included: true, buffer, games: backedUp, bytes: buffer.length };
+}
+
+async function restoreSavesFromZip(buffer) {
+  const ludusaviPath = resolveLudusaviPath();
+  if (!ludusaviPath || !fs.existsSync(ludusaviPath)) {
+    return { success: false, error: "Ludusavi is not installed" };
+  }
+  const staging = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ludex-cloud-restore-"));
+  try {
+    const zipPath = path.join(staging, "saves.zip");
+    fs.writeFileSync(zipPath, buffer);
+    const extractDir = path.join(staging, "backups");
+    await new Promise((resolve, reject) => {
+      fs.createReadStream(zipPath)
+        .pipe(unzipper.Extract({ path: extractDir }))
+        .on("close", resolve)
+        .on("error", reject);
+    });
+    const settings = getSettingsManager().getSettings();
+    const configDir = path.join(staging, "config");
+    writeLudusaviConfig(configDir, collectAllCustomGames(settings));
+    const result = await runProcess(ludusaviPath, [
+      "--config",
+      configDir,
+      "restore",
+      "--force",
+      "--api",
+      "--path",
+      extractDir,
+    ]);
+    return {
+      success: result.code === 0,
+      error: result.code === 0 ? null : result.stderr || `Ludusavi exited with ${result.code}`,
+    };
+  } finally {
+    await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function buildSnapshot(extras = {}) {
   const settings = getSettingsManager().getSettings();
   const profileDir = path.join(app.getPath("userData"), "profile_images");
@@ -288,10 +437,65 @@ async function getRemoteFile(token, config) {
   }
 }
 
+async function getRemoteFileBuffer(token, config, filePath) {
+  const url = `/repos/${config.owner}/${config.repo}/contents/${encodeURIComponent(
+    filePath
+  )}?ref=${encodeURIComponent(config.branch || "main")}`;
+  try {
+    const response = await githubGet(token, url);
+    return {
+      sha: response.data.sha,
+      buffer: Buffer.from(response.data.content || "", "base64"),
+    };
+  } catch (error) {
+    if (error.response?.status === 404) return null;
+    throw error;
+  }
+}
+
+async function putRemoteFileBuffer(token, config, filePath, buffer, message) {
+  const existing = await getRemoteFileBuffer(token, config, filePath);
+  await githubPut(
+    token,
+    `/repos/${config.owner}/${config.repo}/contents/${encodeURIComponent(filePath)}`,
+    {
+      message,
+      content: buffer.toString("base64"),
+      branch: config.branch || "main",
+      ...(existing?.sha ? { sha: existing.sha } : {}),
+    }
+  );
+}
+
 async function pushSnapshot(extras = {}) {
   const config = readConfig();
   if (!config.token) throw new Error("Connect GitHub first");
   const snapshot = await buildSnapshot(extras);
+  const snapshotPath = config.path || DEFAULT_PATH;
+  const savesPath = `${path.posix.dirname(snapshotPath)}/saves.zip`;
+
+  if (extras.includeSaves) {
+    const saves = await backupSavesToZip(snapshot.library);
+    snapshot.saves = {
+      included: !!saves.included,
+      games: saves.games || [],
+      bytes: saves.bytes || 0,
+      path: saves.included ? savesPath : null,
+      error: saves.error || null,
+    };
+    if (saves.included) {
+      await putRemoteFileBuffer(
+        config.token,
+        config,
+        savesPath,
+        saves.buffer,
+        `Ludex Cloud saves ${new Date().toISOString()}`
+      );
+    }
+  } else {
+    snapshot.saves = { included: false };
+  }
+
   const body = JSON.stringify(snapshot, null, 2);
   const encoded = Buffer.from(body, "utf8").toString("base64");
   const existing = await getRemoteFile(config.token, config);
@@ -303,9 +507,7 @@ async function pushSnapshot(extras = {}) {
   };
   await githubPut(
     config.token,
-    `/repos/${config.owner}/${config.repo}/contents/${encodeURIComponent(
-      config.path || DEFAULT_PATH
-    )}`,
+    `/repos/${config.owner}/${config.repo}/contents/${encodeURIComponent(snapshotPath)}`,
     payload
   );
   const next = {
@@ -319,6 +521,7 @@ async function pushSnapshot(extras = {}) {
     success: true,
     bytes: Buffer.byteLength(body),
     library: snapshot.library.length,
+    saves: snapshot.saves,
     exportedAt: snapshot.exportedAt,
     config: publicConfig(),
   };
@@ -362,6 +565,16 @@ async function pullSnapshot() {
   writeImage("profile", snapshot.profile?.image);
   writeImage("banner", snapshot.profile?.banner);
 
+  let savesRestored = null;
+  if (snapshot.saves?.included) {
+    const snapshotPath = config.path || DEFAULT_PATH;
+    const savesPath = snapshot.saves.path || `${path.posix.dirname(snapshotPath)}/saves.zip`;
+    const remoteSaves = await getRemoteFileBuffer(config.token, config, savesPath);
+    savesRestored = remoteSaves
+      ? await restoreSavesFromZip(remoteSaves.buffer)
+      : { success: false, error: "saves.zip was not found in the repository" };
+  }
+
   const next = {
     ...config,
     lastSync: new Date().toISOString(),
@@ -377,6 +590,7 @@ async function pullSnapshot() {
     favorites: snapshot.favorites || [],
     libraryCount: (snapshot.library || []).length,
     appliedSettings: Object.keys(appliedSettings).length,
+    savesRestored,
     config: publicConfig(),
   };
 }

@@ -664,4 +664,7 @@ function registerLudusaviHandlers() {
 
 module.exports = {
   registerLudusaviHandlers,
+  writeLudusaviConfig,
+  collectAllCustomGames,
+  readCustomSavePaths,
 };

@@ -8,6 +8,8 @@ It is a rebranded and extended fork of Ascendara with the Ascend account require
 ## Highlights
 
 - **No account required** for the profile, banner, artwork, mods, or trainers.
+- **Every Ascend feature is free** — subscription checks always return full access.
+- **Cloud game saves** through your own private GitHub repository, with no server bill.
 - **SteamGridDB artwork** — right-click a game in the library and choose **Customize** to pull a new cover, banner, logo, and wide banner automatically.
 - **Nexus Mods browser** with optional direct install using a Nexus API key.
 - **Download queue**, automatic extraction, integrity verification, and per-game speed limits.
@@ -59,11 +61,12 @@ Nothing is written to the host PC's home folder. Release packages include ready-
 
 Ludex Cloud has **no Ludex server and no database bill**. It stores a private snapshot in a GitHub repository that you own:
 
+- **game saves** (via Ludusavi)
 - profile picture, banner and emoji
 - preferences
 - library metadata, favorites and mod profiles
 
-Create a fine-grained GitHub token with **Contents: Read and write**, connect it in **Cloud**, create a private `ludex-cloud` repository, then push or pull. GitHub's free plan is enough.
+Create a fine-grained GitHub token with **Contents: Read and write**, connect it in **Cloud**, create a private `ludex-cloud` repository, then push or pull. GitHub's free plan is enough. The snapshot is stored in your repo; the save archive lives next to it as `saves.zip`.
 
 ## Ludex Stream
 

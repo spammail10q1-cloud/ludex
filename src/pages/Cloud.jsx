@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 
 function Card({ children, className = "" }) {
@@ -31,6 +32,7 @@ export default function CloudPage() {
   const [filePath, setFilePath] = useState("ludex-cloud/snapshot.json");
   const [busy, setBusy] = useState("");
   const [lastResult, setLastResult] = useState(null);
+  const [includeSaves, setIncludeSaves] = useState(true);
 
   const load = async () => {
     const next = await window.electron.cloudGetConfig?.();
@@ -104,11 +106,19 @@ export default function CloudPage() {
   };
 
   const push = async () => {
-    const result = await run("push", () => window.electron.cloudPush(extras()));
+    const result = await run("push", () =>
+      window.electron.cloudPush({ ...extras(), includeSaves })
+    );
     if (result) {
       setLastResult(result);
+      const saves =
+        result.saves?.included
+          ? ` · ${result.saves.games?.length || 0} save backups`
+          : result.saves?.error
+            ? ` · saves skipped: ${result.saves.error}`
+            : "";
       toast.success(
-        `Saved ${result.library} games · ${(result.bytes / 1024).toFixed(1)} KB`
+        `Saved ${result.library} games · ${(result.bytes / 1024).toFixed(1)} KB${saves}`
       );
     }
   };
@@ -134,7 +144,12 @@ export default function CloudPage() {
       localStorage.setItem("game-favorites", JSON.stringify(result.favorites));
     }
     window.dispatchEvent(new CustomEvent("game-cover-updated"));
-    toast.success(`Restored ${result.libraryCount} games · reloading…`);
+    const savesMessage = result.savesRestored
+      ? result.savesRestored.success
+        ? " · saves restored"
+        : ` · saves failed: ${result.savesRestored.error}`
+      : "";
+    toast.success(`Restored ${result.libraryCount} games${savesMessage} · reloading…`);
     setTimeout(() => window.location.reload(), 1200);
   };
 
@@ -338,6 +353,15 @@ export default function CloudPage() {
               )}
               Pull from cloud
             </Button>
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-4 rounded-lg border border-border/40 bg-background/40 p-3">
+            <div>
+              <p className="text-sm font-medium">Include game saves</p>
+              <p className="text-xs text-muted-foreground">
+                Backs up save files with Ludusavi and restores them on pull.
+              </p>
+            </div>
+            <Switch checked={includeSaves} onCheckedChange={setIncludeSaves} />
           </div>
           {lastResult && (
             <pre className="mt-4 max-h-48 overflow-auto rounded-lg border border-border/40 bg-background/40 p-3 text-xs text-muted-foreground">

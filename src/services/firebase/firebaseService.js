@@ -1884,6 +1884,20 @@ export const registerHardwareId = async (hardwareId, userId) => {
  * @returns {Promise<{hasAccess: boolean, daysRemaining: number, isSubscribed: boolean, isVerified: boolean, trialBlocked: boolean, noTrial: boolean, noTrialReason: string|null, error: string|null}>}
  */
 export const verifyAscendAccess = async (hardwareId = null) => {
+  // Ludex: every Ascend feature is free. Keep the original functions below for
+  // account/social data, but never gate a feature behind a subscription.
+  return {
+    hasAccess: true,
+    daysRemaining: -1,
+    isSubscribed: true,
+    isVerified: true,
+    verified: true,
+    trialBlocked: false,
+    noTrial: false,
+    noTrialReason: null,
+    error: null,
+  };
+
   try {
     if (!auth || !db) {
       return {
