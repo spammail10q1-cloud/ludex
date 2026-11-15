@@ -110,6 +110,19 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      - name: Build portable USB packages
+        shell: bash
+        run: |
+          mkdir -p usb-linux usb-windows
+          cp release-assets/*linux*.AppImage usb-linux/Ludex.AppImage
+          cp portable/LudexPortable.sh portable/README.txt usb-linux/
+          cp release-assets/*Portable*.exe usb-windows/Ludex.exe
+          cp portable/LudexPortable.bat portable/README.txt usb-windows/
+          chmod +x usb-linux/LudexPortable.sh
+          (cd usb-linux && zip -r ../release-assets/Ludex-USB-Linux.zip .)
+          (cd usb-windows && zip -r ../release-assets/Ludex-USB-Windows.zip .)
+          ls -lh release-assets
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:

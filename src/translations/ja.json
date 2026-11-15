@@ -1813,7 +1813,8 @@
     "up": "上",
     "view": "ビュー",
     "workshopDownloader": "ワークショップダウンローダー",
-    "stream": "ストリーム"
+    "stream": "ストリーム",
+    "cloud": "クラウド"
   },
   "download": {
     "aboutGame": "このゲームについて",

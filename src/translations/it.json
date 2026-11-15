@@ -1813,7 +1813,8 @@
     "up": "Su",
     "view": "Visualizzazione",
     "workshopDownloader": "Downloader dell'officina",
-    "stream": "Streaming"
+    "stream": "Streaming",
+    "cloud": "Cloud"
   },
   "download": {
     "aboutGame": "Informazioni su questo gioco",

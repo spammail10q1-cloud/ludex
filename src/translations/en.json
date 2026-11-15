@@ -1813,7 +1813,8 @@
     "up": "Up",
     "view": "View",
     "workshopDownloader": "Workshop Downloader",
-    "stream": "Stream"
+    "stream": "Stream",
+    "cloud": "Cloud"
   },
   "download": {
     "aboutGame": "About This Game",

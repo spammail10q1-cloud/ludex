@@ -188,6 +188,7 @@ const pageLoaders = {
   gameScreen: () => import("./pages/GameScreen"),
   profile: () => import("./pages/Profile"),
   stream: () => import("./pages/Stream"),
+  cloud: () => import("./pages/Cloud"),
   ascend: () => import("./pages/Ascend"),
   library: () => import("./pages/Library"),
   folderView: () => import("./pages/FolderView"),
@@ -207,6 +208,7 @@ const DebridDownloads = lazyPage(pageLoaders.debridDownloads);
 const GameScreen = lazyPage(pageLoaders.gameScreen);
 const Profile = lazyPage(pageLoaders.profile);
 const Stream = lazyPage(pageLoaders.stream);
+const CloudPage = lazyPage(pageLoaders.cloud);
 const Ascend = lazyPage(pageLoaders.ascend);
 const Library = lazyPage(pageLoaders.library);
 const FolderView = lazyPage(pageLoaders.folderView);
@@ -2172,6 +2174,7 @@ const AppRoutes = () => {
             />
             <Route path="profile" element={<Profile />} />
             <Route path="stream" element={<Stream />} />
+            <Route path="cloud" element={<CloudPage />} />
             <Route path="ascend" element={<Ascend />} />
             <Route path="workshopdownloader" element={<WorkshopDownloader />} />
             <Route

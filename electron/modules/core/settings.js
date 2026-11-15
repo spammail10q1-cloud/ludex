@@ -53,7 +53,7 @@ class SettingsManager {
       legacy: { encrypt, decrypt },
     });
     this.defaultSettings = {
-      downloadDirectory: "",
+      downloadDirectory: process.env.LUDEX_DOWNLOAD_DIR || "",
       additionalDirectories: [],
       watchingFolders: [],
       defaultOpenPage: "home",

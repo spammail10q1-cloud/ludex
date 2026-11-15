@@ -754,6 +754,15 @@ contextBridge.exposeInMainWorld("electron", {
   streamStartServer: () => ipcRenderer.invoke("stream-start-server"),
   streamStopServer: () => ipcRenderer.invoke("stream-stop-server"),
   streamGetServerUrl: () => ipcRenderer.invoke("stream-get-server-url"),
+
+  // Ludex Cloud (bring-your-own GitHub storage)
+  cloudGetConfig: () => ipcRenderer.invoke("cloud-get-config"),
+  cloudSaveConfig: patch => ipcRenderer.invoke("cloud-save-config", patch),
+  cloudConnect: options => ipcRenderer.invoke("cloud-connect", options),
+  cloudCreateRepo: options => ipcRenderer.invoke("cloud-create-repo", options),
+  cloudPush: extras => ipcRenderer.invoke("cloud-push", extras),
+  cloudPull: () => ipcRenderer.invoke("cloud-pull"),
+  cloudSignOut: () => ipcRenderer.invoke("cloud-sign-out"),
   isOnWindows: () => ipcRenderer.invoke("is-on-windows"),
   isOnLinux: () => ipcRenderer.invoke("is-on-linux"),
   fetchSystemSpecs: () => ipcRenderer.invoke("fetch-system-specs"),

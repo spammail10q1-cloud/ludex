@@ -40,13 +40,28 @@ const {
   session,
 } = require("electron");
 const http = require("http");
+const {
+  isPortableMode,
+  portableDataDir,
+  portableGamesDir,
+} = require("./modules/core/portable");
+
 // Keep the existing profile/settings folder even though the product name is
-// now Ludex, so an update never loses user data.
+// now Ludex, so an update never loses user data. Portable mode stores
+// everything on the portable drive instead.
 try {
   app.setName("Ludex");
-  app.setPath("userData", path.join(app.getPath("appData"), "ascendara"));
+  app.setPath(
+    "userData",
+    isPortableMode
+      ? portableDataDir
+      : path.join(app.getPath("appData"), "ascendara")
+  );
+  if (isPortableMode) {
+    process.env.LUDEX_DOWNLOAD_DIR = portableGamesDir;
+  }
 } catch (error) {
-  console.warn("Could not preserve the legacy userData path:", error.message);
+  console.warn("Could not configure the userData path:", error.message);
 }
 const { proxyLocalRequest } = require("./modules/core/local-api-proxy");
 const fs = require("fs-extra");
@@ -412,6 +427,7 @@ function registerCriticalHandlers() {
   require("./modules/downloads/privateSources").registerPrivateSourceHandlers();
   games.registerGameHandlers();
   require("./modules/stream/streamManager").registerStreamHandlers();
+  require("./modules/cloud/ludexCloud").registerCloudHandlers();
   require("./modules/library/libraryTransfer").registerLibraryTransferHandlers();
   require("./modules/store-accounts").registerStoreAccountHandlers();
   require("./modules/retro").registerRetroHandlers();

@@ -41,6 +41,30 @@ curl -fsSL https://raw.githubusercontent.com/spammail10q1-cloud/ludex/main/insta
 
 The script installs Ludex in Desktop Mode, handles missing FUSE/libfuse2 with an extracted fallback, and creates a launchable entry for Steam Game Mode. Add **Ludex** as a Non-Steam Game to use it in Game Mode.
 
+## Portable mode (USB / external SSD)
+
+Run Ludex entirely from a USB stick or external drive:
+
+- **Windows:** put `Ludex.exe` next to `portable/LudexPortable.bat` and run the `.bat`.
+- **Linux / Steam Deck:** put `Ludex.AppImage` next to `portable/LudexPortable.sh` and run the script.
+
+Everything lives on the drive:
+
+- `LudexData/` — settings, profile, artwork cache, Proton prefixes, runners
+- `Games/` — default game install folder
+
+Nothing is written to the host PC's home folder. Release packages include ready-made USB zips.
+
+## Ludex Cloud (zero-cost, bring your own storage)
+
+Ludex Cloud has **no Ludex server and no database bill**. It stores a private snapshot in a GitHub repository that you own:
+
+- profile picture, banner and emoji
+- preferences
+- library metadata, favorites and mod profiles
+
+Create a fine-grained GitHub token with **Contents: Read and write**, connect it in **Cloud**, create a private `ludex-cloud` repository, then push or pull. GitHub's free plan is enough.
+
 ## Ludex Stream
 
 Ludex Stream turns your PC into a private game-streaming host using **Sunshine** and **Moonlight**:

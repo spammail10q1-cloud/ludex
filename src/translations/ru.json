@@ -1813,7 +1813,8 @@
     "up": "Вверх",
     "view": "Вид",
     "workshopDownloader": "Загрузчик мастерской",
-    "stream": "Стриминг"
+    "stream": "Стриминг",
+    "cloud": "Облако"
   },
   "download": {
     "aboutGame": "Об этой игре",

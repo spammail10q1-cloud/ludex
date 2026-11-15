@@ -15,6 +15,7 @@ import {
   ServerIcon,
   CircleArrowDown,
   Cast,
+  Cloud,
 } from "lucide-react";
 // Ascend integration is disabled in this build.
 import {
@@ -196,6 +197,13 @@ const Navigation = memo(({ items }) => {
       label: t("common.stream") || "Stream",
       icon: Cast,
       color: "from-cyan-400 to-blue-600",
+    });
+
+    items.push({
+      path: "/cloud",
+      label: t("common.cloud") || "Cloud",
+      icon: Cloud,
+      color: "from-sky-400 to-indigo-600",
     });
 
     items.push({

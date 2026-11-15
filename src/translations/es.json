@@ -1813,7 +1813,8 @@
     "up": "Arriba",
     "view": "Vista",
     "workshopDownloader": "Descargador de talleres",
-    "stream": "Streaming"
+    "stream": "Streaming",
+    "cloud": "Nube"
   },
   "download": {
     "aboutGame": "Acerca de este juego",

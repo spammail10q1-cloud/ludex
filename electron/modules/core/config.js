@@ -7,21 +7,38 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs");
 const { app } = require("electron");
+const {
+  isPortableMode,
+  portableRoot,
+  portableDataDir,
+  portableGamesDir,
+} = require("./portable");
 
 // Environment detection
 const isDev = !app.isPackaged;
 const isWindows = os.platform().startsWith("win");
 // electron-builder's portable target sets this before starting the app. Portable
 // copies can't run the Setup installer to update, so updates go via the release page.
-const isPortable = isWindows && Boolean(process.env.PORTABLE_EXECUTABLE_FILE);
+const isPortable =
+  isPortableMode || (isWindows && Boolean(process.env.PORTABLE_EXECUTABLE_FILE));
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
 
+const dataRoot = isPortableMode ? portableDataDir : null;
+
 // Shared Unix tool storage; Proton paths remain Linux-only.
-const unixConfigDir = !isWindows ? path.join(os.homedir(), ".ascendara") : null;
+const unixConfigDir = !isWindows
+  ? dataRoot
+    ? path.join(dataRoot, "ascendara")
+    : path.join(os.homedir(), ".ascendara")
+  : null;
 
 // Linux-specific paths
-const linuxConfigDir = isLinux ? path.join(os.homedir(), ".ascendara") : null;
+const linuxConfigDir = isLinux
+  ? dataRoot
+    ? path.join(dataRoot, "ascendara")
+    : path.join(os.homedir(), ".ascendara")
+  : null;
 const linuxCompatDataDir = isLinux ? path.join(linuxConfigDir, "compatdata") : null;
 const linuxRunnersDir = isLinux ? path.join(linuxConfigDir, "runners") : null;
 
@@ -53,9 +70,11 @@ const STEAM_INSTALL_PATHS = isLinux
 
 // File paths. Windows uses %APPDATA%\ascendara (next to ascendarasettings.json)
 // because the profile root is often locked down by antivirus or read-only flags.
-const appConfigDir = isWindows
-  ? path.join(process.env.APPDATA, "ascendara")
-  : unixConfigDir;
+const appConfigDir = isPortableMode
+  ? dataRoot
+  : isWindows
+    ? path.join(process.env.APPDATA, "ascendara")
+    : unixConfigDir;
 const TIMESTAMP_FILE = path.join(appConfigDir, "timestamp.ascendara.json");
 
 // Older versions kept these files loose in the home directory. Move them into
@@ -100,11 +119,13 @@ function migrateHomeFiles() {
 }
 migrateHomeFiles();
 
-const LANG_DIR = isWindows
-  ? path.join(process.env.LOCALAPPDATA, "Ludex", "languages")
-  : isMac
-    ? path.join(os.homedir(), "Library/Application Support/ascendara/languages")
-    : path.join(os.homedir(), ".ascendara", "languages");
+const LANG_DIR = isPortableMode
+  ? path.join(dataRoot, "languages")
+  : isWindows
+    ? path.join(process.env.LOCALAPPDATA, "Ludex", "languages")
+    : isMac
+      ? path.join(os.homedir(), "Library/Application Support/ascendara/languages")
+      : path.join(os.homedir(), ".ascendara", "languages");
 
 const appDirectory = path.join(path.dirname(app.getPath("exe")));
 
@@ -210,7 +231,7 @@ const DEPENDENCY_REGISTRY_PATHS = {
 // ============================================================================
 
 const appBranch = "live";
-const appVersion = "12.3.1";
+const appVersion = "12.4.0";
 const testingVersion = "";
 
 // Experimental and public-testing install the same "testing" build, so that
@@ -255,6 +276,10 @@ module.exports = {
   isDev,
   isWindows,
   isPortable,
+  isPortableMode,
+  portableRoot,
+  portableDataDir,
+  portableGamesDir,
   TIMESTAMP_FILE,
   LANG_DIR,
   appDirectory,
