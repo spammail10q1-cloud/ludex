@@ -411,6 +411,7 @@ function registerCriticalHandlers() {
   downloads.registerDownloadHandlers();
   require("./modules/downloads/privateSources").registerPrivateSourceHandlers();
   games.registerGameHandlers();
+  require("./modules/stream/streamManager").registerStreamHandlers();
   require("./modules/library/libraryTransfer").registerLibraryTransferHandlers();
   require("./modules/store-accounts").registerStoreAccountHandlers();
   require("./modules/retro").registerRetroHandlers();
@@ -552,6 +553,18 @@ async function initializeApp() {
       const portHolder = errorCode === "EADDRINUSE" ? await describePortHolder() : null;
       if (portHolder) console.error("Port 46859 is held by", portHolder);
       windowModule.setAppServerOwned(owned, errorCode, portHolder);
+
+      // Ludex Stream's invite page is a separate, local-only HTTP server.
+      try {
+        const stream = require("./modules/stream/streamManager");
+        if (stream.getSettings().enabled) {
+          stream.startInviteServer().catch(error =>
+            console.warn("[Stream] Invite server unavailable:", error.message)
+          );
+        }
+      } catch (error) {
+        console.warn("[Stream] Could not start invite server:", error.message);
+      }
     } else {
       await ensureDevServerRunning();
     }

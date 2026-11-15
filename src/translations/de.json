@@ -1812,7 +1812,8 @@
     "unknown": "Unbekannt",
     "up": "Hoch",
     "view": "Sicht",
-    "workshopDownloader": "Workshop-Downloader"
+    "workshopDownloader": "Workshop-Downloader",
+    "stream": "Stream"
   },
   "download": {
     "aboutGame": "Über dieses Spiel",

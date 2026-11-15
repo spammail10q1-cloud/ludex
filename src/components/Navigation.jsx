@@ -14,6 +14,7 @@ import {
   User,
   ServerIcon,
   CircleArrowDown,
+  Cast,
 } from "lucide-react";
 // Ascend integration is disabled in this build.
 import {
@@ -189,6 +190,13 @@ const Navigation = memo(({ items }) => {
       // Splits the download pages from the rest of the dock
       { separator: true, path: "separator" },
     ];
+
+    items.push({
+      path: "/stream",
+      label: t("common.stream") || "Stream",
+      icon: Cast,
+      color: "from-cyan-400 to-blue-600",
+    });
 
     items.push({
       path: "/profile",

@@ -1812,7 +1812,8 @@
     "unknown": "Desconocido",
     "up": "Arriba",
     "view": "Vista",
-    "workshopDownloader": "Descargador de talleres"
+    "workshopDownloader": "Descargador de talleres",
+    "stream": "Streaming"
   },
   "download": {
     "aboutGame": "Acerca de este juego",

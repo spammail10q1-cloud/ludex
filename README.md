@@ -31,6 +31,26 @@ irm https://raw.githubusercontent.com/spammail10q1-cloud/ludex/main/install-wind
 
 This downloads the portable build, installs it to `%LOCALAPPDATA%\Ludex`, and creates Start Menu and Desktop shortcuts.
 
+### Steam Deck / SteamOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/spammail10q1-cloud/ludex/main/install-steamdeck.sh | bash
+```
+
+The script installs Ludex in Desktop Mode, handles missing FUSE/libfuse2 with an extracted fallback, and creates a launchable entry for Steam Game Mode. Add **Ludex** as a Non-Steam Game to use it in Game Mode.
+
+## Ludex Stream
+
+Ludex Stream turns your PC into a private game-streaming host using **Sunshine** and **Moonlight**:
+
+- Install Sunshine on the host PC.
+- Open **Stream** in Ludex, start Sunshine, and sync your games.
+- Create an invite link for a game and a quality profile.
+- Send the link to a friend on your network. The page includes the Moonlight command, client downloads, and Wake-on-LAN.
+- Pair each client once in Sunshine's web UI, then stream.
+
+No subscription and no central server: video and input stay between your devices. For internet play, forward the Sunshine ports and set a public host in Ludex Stream settings.
+
 ## Update
 
 - Linux: `curl -fsSL https://raw.githubusercontent.com/spammail10q1-cloud/ludex/main/update-linux.sh | bash`

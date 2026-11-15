@@ -1812,7 +1812,8 @@
     "unknown": "Неизвестный",
     "up": "Вверх",
     "view": "Вид",
-    "workshopDownloader": "Загрузчик мастерской"
+    "workshopDownloader": "Загрузчик мастерской",
+    "stream": "Стриминг"
   },
   "download": {
     "aboutGame": "Об этой игре",

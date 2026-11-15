@@ -736,6 +736,24 @@ contextBridge.exposeInMainWorld("electron", {
   // SYSTEM & PLATFORM
   //===========================================================================
   getPlatform: () => process.platform,
+
+  // Ludex Stream
+  streamGetStatus: () => ipcRenderer.invoke("stream-get-status"),
+  streamSaveSettings: patch => ipcRenderer.invoke("stream-save-settings", patch),
+  streamStartSunshine: () => ipcRenderer.invoke("stream-start-sunshine"),
+  streamStopSunshine: () => ipcRenderer.invoke("stream-stop-sunshine"),
+  streamOpenSunshine: () => ipcRenderer.invoke("stream-open-sunshine"),
+  streamSyncGames: () => ipcRenderer.invoke("stream-sync-games"),
+  streamListGames: () => ipcRenderer.invoke("stream-list-games"),
+  streamCreateSession: (gameName, options) =>
+    ipcRenderer.invoke("stream-create-session", gameName, options),
+  streamListSessions: () => ipcRenderer.invoke("stream-list-sessions"),
+  streamRevokeSession: idOrToken =>
+    ipcRenderer.invoke("stream-revoke-session", idOrToken),
+  streamWake: () => ipcRenderer.invoke("stream-wake"),
+  streamStartServer: () => ipcRenderer.invoke("stream-start-server"),
+  streamStopServer: () => ipcRenderer.invoke("stream-stop-server"),
+  streamGetServerUrl: () => ipcRenderer.invoke("stream-get-server-url"),
   isOnWindows: () => ipcRenderer.invoke("is-on-windows"),
   isOnLinux: () => ipcRenderer.invoke("is-on-linux"),
   fetchSystemSpecs: () => ipcRenderer.invoke("fetch-system-specs"),

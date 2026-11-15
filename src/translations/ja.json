@@ -1812,7 +1812,8 @@
     "unknown": "未知",
     "up": "上",
     "view": "ビュー",
-    "workshopDownloader": "ワークショップダウンローダー"
+    "workshopDownloader": "ワークショップダウンローダー",
+    "stream": "ストリーム"
   },
   "download": {
     "aboutGame": "このゲームについて",
