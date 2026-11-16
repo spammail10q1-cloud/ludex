@@ -2866,7 +2866,15 @@
     "modInstalled": "{{name}} installiert",
     "gameDownloadLimit": "Download-Geschwindigkeitslimit (pro Spiel)",
     "gameDownloadLimitPlaceholder": "0 = globales Limit verwenden",
-    "gameDownloadLimitHint": "KB/s. Überschreibt das globale Limit nur für dieses Spiel."
+    "gameDownloadLimitHint": "KB/s. Überschreibt das globale Limit nur für dieses Spiel.",
+    "nxmTitle": "Nexus-Downloads mit einem Klick (ohne API-Schlüssel)",
+    "nxmDescription": "Aktiviere den nxm://-Handler und klicke auf Nexus auf „Mod Manager Download“. Ludex installiert die Mod direkt. Kostenlose Accounts werden unterstützt.",
+    "nxmEnable": "nxm-Handler aktivieren",
+    "nxmDisable": "nxm-Handler aktiv",
+    "nxmInstall": "nxm-Link installieren",
+    "nxmRegistered": "nxm://-Handler aktiviert",
+    "nxmUnregistered": "nxm://-Handler deaktiviert",
+    "nxmInstalled": "{{file}} installiert"
   },
   "globalSearch": {
     "categories": {

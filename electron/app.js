@@ -428,6 +428,7 @@ function registerCriticalHandlers() {
   games.registerGameHandlers();
   require("./modules/stream/streamManager").registerStreamHandlers();
   require("./modules/cloud/ludexCloud").registerCloudHandlers();
+  require("./modules/mods/nexusNxm").registerNxmHandlers();
   require("./modules/library/libraryTransfer").registerLibraryTransferHandlers();
   require("./modules/store-accounts").registerStoreAccountHandlers();
   require("./modules/retro").registerRetroHandlers();

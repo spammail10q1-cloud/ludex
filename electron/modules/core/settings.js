@@ -60,7 +60,7 @@ class SettingsManager {
       behaviorAfterDownload: "none",
       showOldDownloadLinks: false,
       seeInappropriateContent: false,
-      hideOnGameLaunch: true,
+      hideOnGameLaunch: false,
       earlyReleasePreview: false,
       viewWorkshopPage: false,
       notifications: true,
@@ -100,6 +100,7 @@ class SettingsManager {
       // connection. It only applies once the person turns it on themselves.
       singleStreamChosen: false,
       downloadLimit: 0,
+      preferProtonDirect: true,
       sideScrollBar: false,
       excludeFolders: false,
       prioritizeTorboxOverSeamless: false,

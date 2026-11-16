@@ -2866,7 +2866,15 @@
     "modInstalled": "{{name}} installed",
     "gameDownloadLimit": "Download speed limit (per game)",
     "gameDownloadLimitPlaceholder": "0 = use global limit",
-    "gameDownloadLimitHint": "KB/s. Overrides the global limit for this game only."
+    "gameDownloadLimitHint": "KB/s. Overrides the global limit for this game only.",
+    "nxmTitle": "One-click Nexus downloads (no API key)",
+    "nxmDescription": "Enable the nxm:// handler, then click Mod Manager Download on Nexus. Ludex installs the mod directly. Free accounts are supported.",
+    "nxmEnable": "Enable nxm handler",
+    "nxmDisable": "nxm handler enabled",
+    "nxmInstall": "Install nxm link",
+    "nxmRegistered": "nxm:// handler enabled",
+    "nxmUnregistered": "nxm:// handler disabled",
+    "nxmInstalled": "Installed {{file}}"
   },
   "globalSearch": {
     "categories": {

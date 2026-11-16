@@ -553,8 +553,10 @@ pub fn launch_with_umu(exe_path: &str, config: &RunnerConfig, launch_cmd: Option
 
 #[cfg(target_os = "linux")]
 fn download(url: &str, dest: &str) -> Result<()> {
-    // rustls with bundled Mozilla roots, so installers are always authenticated
-    let response = ureq::get(url).timeout(Duration::from_secs(60)).call()?;
+    // rustls with bundled Mozilla roots, so installers are always authenticated.
+    // Keep this short: a slow Microsoft CDN must never delay a game launch for
+    // minutes. If the runtime is already present we skip this entirely below.
+    let response = ureq::get(url).timeout(Duration::from_secs(20)).call()?;
     let mut file = std::fs::File::create(dest)?;
     std::io::copy(&mut response.into_reader(), &mut file)?;
     Ok(())
@@ -565,11 +567,26 @@ fn download(_url: &str, _dest: &str) -> Result<()> {
     bail!("vcredist downloads are only supported on Linux")
 }
 
+/// A prefix can already have the VC++ runtime from a previous install, a game
+/// redistributable, or Proton itself. In that case downloading the redist again
+/// only delays the launch.
+fn vcredist_present(prefix_path: &str) -> bool {
+    let system32 = pypath::join(prefix_path, "drive_c/windows/system32");
+    ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"]
+        .iter()
+        .all(|file| pypath::exists(&pypath::join(&system32, file)))
+}
+
 /// Install Visual C++ redistributables (x86 + x64) using umu-run or Proton.
 fn install_vcredist(prefix_path: &str, env: &BTreeMap<String, String>, umu_bin: Option<&str>, proton_script: Option<&str>) -> Result<()> {
     let marker = pypath::join(prefix_path, ".vcredist_installed");
     if pypath::exists(&marker) {
         info!("[VCREDIST] Already installed, skipping");
+        return Ok(());
+    }
+    if vcredist_present(prefix_path) {
+        std::fs::File::create(&marker)?;
+        info!("[VCREDIST] Runtime already present in the prefix, skipping");
         return Ok(());
     }
     if umu_bin.is_none() && proton_script.is_none() {
@@ -635,8 +652,8 @@ fn install_vcredist(prefix_path: &str, env: &BTreeMap<String, String>, umu_bin: 
         }
     }
 
-    // Only create the marker if both succeeded
-    if all_success {
+    // Only create the marker if both succeeded, or if the DLLs are already there
+    if all_success || vcredist_present(prefix_path) {
         std::fs::File::create(&marker)?;
         info!("[VCREDIST] All redistributables installed successfully");
     } else {

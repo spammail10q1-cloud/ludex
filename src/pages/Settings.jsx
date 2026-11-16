@@ -3116,6 +3116,24 @@ function Settings() {
                           {t("settings.linuxCompat.infoBoxUmuLauncher")}
                         </p>
 
+                        <div className="flex items-center justify-between gap-4 rounded-lg border border-border/50 p-3">
+                          <div>
+                            <p className="text-sm font-medium">
+                              {t("settings.preferProtonDirect") || "Prefer Proton Direct"}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {t("settings.preferProtonDirectDescription") ||
+                                "Skip the UMU/Steam Runtime layer for much faster game startup. Disable if a game needs UMU fixes."}
+                            </p>
+                          </div>
+                          <Switch
+                            checked={settings.preferProtonDirect !== false}
+                            onCheckedChange={checked =>
+                              handleSettingChange("preferProtonDirect", checked)
+                            }
+                          />
+                        </div>
+
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           {/* UMU Launcher */}
                           <div className="space-y-3 border-l-2 border-border pl-4">

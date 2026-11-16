@@ -110,7 +110,11 @@ yarn dist
 
 GitHub Actions builds both targets automatically and publishes them as release assets when a `v*` tag is pushed.
 
-## Nexus Mods direct install
+## Nexus Mods without an API key
+
+Ludex registers as the `nxm://` handler. On Nexus, click **Mod Manager Download** and Ludex resolves the free-account link, downloads the archive, and installs it. No API key and no Premium account are needed. You can also paste an `nxm://` link directly in the Mods tab.
+
+## Nexus Mods direct install (API key)
 
 Open a game → **Mods** → paste your Nexus Mods API key. Nexus Premium is required by Nexus itself for direct downloads. Without Premium the app still opens the normal Nexus download page.
 

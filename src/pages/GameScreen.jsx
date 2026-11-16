@@ -1411,6 +1411,9 @@ function InstalledGameScreen() {
     () => localStorage.getItem("nexusApiKey") || ""
   );
   const [directInstalling, setDirectInstalling] = useState(null);
+  const [nxmLink, setNxmLink] = useState("");
+  const [nxmStatus, setNxmStatus] = useState({ registered: false, supported: true });
+  const [nxmInstalling, setNxmInstalling] = useState(false);
   const modsPerPage = 12;
 
   // FLiNG Trainer state
@@ -2311,6 +2314,39 @@ function InstalledGameScreen() {
     checkNexusModSupport();
   }, [game?.game, game?.name]);
 
+  // Nexus one-click (nxm://) handler
+  useEffect(() => {
+    let cancelled = false;
+    window.electron.nexusNxmStatus?.().then(status => {
+      if (!cancelled && status) setNxmStatus(status);
+    });
+
+    const offStarted = window.electron.onNxmInstallStarted?.(data => {
+      toast.info(`Installing ${data?.nxm?.domain || "Nexus mod"}…`);
+    });
+    const offResult = window.electron.onNxmInstallResult?.(data => {
+      if (data?.success) {
+        toast.success(`Nexus mod installed${data.file ? `: ${data.file}` : ""}`);
+        fetchMods(modsPage, modsSearchQuery, modsSortBy);
+      } else if (data?.error) {
+        toast.error(data.error);
+      }
+    });
+    const offNeedsGame = window.electron.onNxmNeedsGame?.(data => {
+      if (data?.url) {
+        setNxmLink(data.url);
+        toast.info("Paste the nxm link and choose this game to install it.");
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      offStarted?.();
+      offResult?.();
+      offNeedsGame?.();
+    };
+  }, [modsPage, modsSearchQuery, modsSortBy]);
+
   // Check FLiNG Trainer support for the game
   useEffect(() => {
     let cancelled = false;
@@ -2507,6 +2543,48 @@ function InstalledGameScreen() {
       toast.error(error.message);
     } finally {
       setDirectInstalling(null);
+    }
+  };
+
+  const handleRegisterNxm = async () => {
+    try {
+      const result = nxmStatus.registered
+        ? await window.electron.nexusNxmUnregister?.()
+        : await window.electron.nexusNxmRegister?.();
+      if (result?.success) {
+        setNxmStatus(previous => ({ ...previous, registered: !previous.registered }));
+        toast.success(
+          nxmStatus.registered
+            ? t("gameScreen.nxmUnregistered") || "nxm:// handler disabled"
+            : t("gameScreen.nxmRegistered") || "nxm:// handler enabled"
+        );
+      } else {
+        toast.error(result?.error || "Could not change the nxm:// handler");
+      }
+    } catch (error) {
+      toast.error(error.message);
+    }
+  };
+
+  const handleInstallNxm = async () => {
+    if (!nxmLink.trim()) return;
+    setNxmInstalling(true);
+    try {
+      const result = await window.electron.nexusNxmInstall?.(
+        nxmLink.trim(),
+        game.game || game.name
+      );
+      if (!result?.success) throw new Error(result?.error || "Install failed");
+      toast.success(
+        t("gameScreen.nxmInstalled", { file: result.file }) ||
+          `Installed ${result.file}`
+      );
+      setNxmLink("");
+      fetchMods(modsPage, modsSearchQuery, modsSortBy);
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setNxmInstalling(false);
     }
   };
 
@@ -3298,6 +3376,12 @@ function InstalledGameScreen() {
                 onNexusApiKeyChange: handleNexusApiKeyChange,
                 onDirectInstall: handleDirectInstallMod,
                 directInstalling,
+                nxmStatus,
+                onToggleNxm: handleRegisterNxm,
+                nxmLink,
+                onNxmLinkChange: setNxmLink,
+                onInstallNxm: handleInstallNxm,
+                nxmInstalling,
               }}
             />
           )}

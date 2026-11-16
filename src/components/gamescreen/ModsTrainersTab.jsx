@@ -10,6 +10,7 @@ import {
 import { useLanguage } from "@/context/LanguageContext";
 import {
   Bolt,
+  Check,
   Download,
   ExternalLink,
   FileCheck2,
@@ -171,6 +172,12 @@ function ModsSection({
   onBrowse,
   nexusApiKey,
   onNexusApiKeyChange,
+  nxmStatus,
+  onToggleNxm,
+  nxmLink,
+  onNxmLinkChange,
+  onInstallNxm,
+  nxmInstalling,
 }) {
   const { t } = useLanguage();
   return (
@@ -208,6 +215,56 @@ function ModsSection({
               <SelectItem value="updatedAt">{t("gameScreen.sortRecent")}</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+      </div>
+
+      <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">
+              {t("gameScreen.nxmTitle") || "One-click Nexus downloads (no API key)"}
+            </h3>
+            <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
+              {t("gameScreen.nxmDescription") ||
+                "Enable the nxm:// handler, then click Mod Manager Download on Nexus. Ludex installs the mod directly. Free accounts are supported."}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant={nxmStatus?.registered ? "outline" : "default"}
+            className="shrink-0 gap-2"
+            disabled={!nxmStatus?.supported}
+            onClick={onToggleNxm}
+          >
+            {nxmStatus?.registered ? (
+              <Check className="h-4 w-4" />
+            ) : (
+              <Puzzle className="h-4 w-4" />
+            )}
+            {nxmStatus?.registered
+              ? t("gameScreen.nxmDisable") || "nxm handler enabled"
+              : t("gameScreen.nxmEnable") || "Enable nxm handler"}
+          </Button>
+        </div>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <Input
+            value={nxmLink || ""}
+            onChange={event => onNxmLinkChange?.(event.target.value)}
+            placeholder="nxm://ghostoftsushima/mods/123/files/456?key=…&expires=…"
+            className="font-mono text-xs"
+          />
+          <Button
+            className="shrink-0 gap-2 text-secondary"
+            disabled={!nxmLink?.trim() || nxmInstalling}
+            onClick={onInstallNxm}
+          >
+            {nxmInstalling ? (
+              <Loader className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            {t("gameScreen.nxmInstall") || "Install nxm link"}
+          </Button>
         </div>
       </div>
 

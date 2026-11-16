@@ -1,6 +1,6 @@
 {
   "name": "ascendara",
-  "version": "12.5.1",
+  "version": "12.7.0",
   "main": "electron/app.js",
   "description": "Ludex game library and launcher",
   "repository": {

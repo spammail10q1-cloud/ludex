@@ -24,7 +24,7 @@ function findProtocolUrlInArgs(args = process.argv) {
   for (const rawArg of args) {
     if (typeof rawArg !== "string") continue;
     const cleaned = rawArg.trim().replace(/^["']+|["']+$/g, "");
-    if (cleaned.startsWith("ascendara://")) {
+    if (cleaned.startsWith("ascendara://") || /^nxm:\/\//i.test(cleaned)) {
       return cleaned;
     }
   }
@@ -91,6 +91,15 @@ function handleProtocolUrl(url) {
   if (!url) return;
 
   const cleanUrl = url.trim().replace(/^["']+|["']+$/g, "");
+
+  if (/^nxm:\/\//i.test(cleanUrl)) {
+    console.log("Processing nxm:// mod link");
+    require("../mods/nexusNxm")
+      .handleNxmUrl(cleanUrl)
+      .catch(error => console.error("[NXM] Failed:", error));
+    return;
+  }
+
   if (!cleanUrl.startsWith("ascendara://")) return;
 
   const earlyGameId = parseGameIdFromUrl(cleanUrl);
@@ -417,6 +426,15 @@ function setupSingleInstance() {
     if (startupPlayGame) {
       pendingPlayGames.add(startupPlayGame);
     }
+    if (/^nxm:\/\//i.test(startupProtocolUrl)) {
+      app.whenReady().then(() =>
+        setTimeout(() => {
+          require("../mods/nexusNxm")
+            .handleNxmUrl(startupProtocolUrl)
+            .catch(error => console.error("[NXM] Startup link failed:", error));
+        }, 1500)
+      );
+    }
   }
 
   // Watch for protocol file changes (other instances passing URLs to us)
@@ -430,7 +448,10 @@ function setupSingleInstance() {
             console.log("Received show-window signal from another instance");
             focusMainWindow();
             fs.unlinkSync(protocolFile);
-          } else if (protocolUrl && protocolUrl.startsWith("ascendara://")) {
+          } else if (
+            protocolUrl &&
+            (protocolUrl.startsWith("ascendara://") || /^nxm:\/\//i.test(protocolUrl))
+          ) {
             console.log("Received protocol URL from another instance:", protocolUrl);
             handleProtocolUrl(protocolUrl);
             // Delete the file after reading

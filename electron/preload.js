@@ -392,6 +392,24 @@ contextBridge.exposeInMainWorld("electron", {
   saveGameAsset: (gameName, filename, dataUrl) =>
     ipcRenderer.invoke("save-game-asset", gameName, filename, dataUrl),
   nexusDirectInstall: options => ipcRenderer.invoke("nexus-direct-install", options),
+  nexusNxmStatus: () => ipcRenderer.invoke("nexus-nxm-status"),
+  nexusNxmRegister: () => ipcRenderer.invoke("nexus-nxm-register"),
+  nexusNxmUnregister: () => ipcRenderer.invoke("nexus-nxm-unregister"),
+  nexusNxmInstall: (nxmUrl, gameName) =>
+    ipcRenderer.invoke("nexus-nxm-install", nxmUrl, gameName),
+  nexusNxmParse: nxmUrl => ipcRenderer.invoke("nexus-nxm-parse", nxmUrl),
+  onNxmInstallResult: callback =>
+    preloadIpc.subscribe("nxm-install-result", callback, {
+      selectArgs: args => [args[0]],
+    }),
+  onNxmInstallStarted: callback =>
+    preloadIpc.subscribe("nxm-install-started", callback, {
+      selectArgs: args => [args[0]],
+    }),
+  onNxmNeedsGame: callback =>
+    preloadIpc.subscribe("nxm-needs-game", callback, {
+      selectArgs: args => [args[0]],
+    }),
 
   // Game Rating & Backups
   gameRated: (game, isCustom) => ipcRenderer.invoke("game-rated", game, isCustom),

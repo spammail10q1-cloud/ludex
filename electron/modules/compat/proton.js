@@ -1424,7 +1424,9 @@ async function buildLaunchConfig(
   // Proton Direct is triggered whenever the user (or the parser) has set
   // useProtonDirect to true. This works even when detection failed, so the
   // user can manually force Proton Direct for a game the parser missed.
-  const forceProtonDirect = !!onlineFix?.useProtonDirect;
+  const preferProtonDirect =
+    getSettingsManager().getSettings().preferProtonDirect === true;
+  const forceProtonDirect = !!onlineFix?.useProtonDirect || preferProtonDirect;
   const umuBin = getUmuBin();
   if (umuBin && !forceProtonDirect) {
     const runner = await resolveRunner(gameRunnerOverride);
