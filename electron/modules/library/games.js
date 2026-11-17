@@ -2054,9 +2054,6 @@ function registerGameHandlers() {
 
   ipcMain.handle("nexus-direct-install", async (_, options = {}) => {
     const { apiKey, domainName, modId, fileId, gameName } = options;
-    if (!apiKey || typeof apiKey !== "string") {
-      return { success: false, error: "Add a Nexus Mods API key first" };
-    }
     if (
       typeof domainName !== "string" ||
       !/^[a-z0-9_-]+$/i.test(domainName) ||
@@ -2091,15 +2088,27 @@ function registerGameHandlers() {
     const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ludex-nexus-"));
     try {
       const headers = {
-        apikey: apiKey,
+        ...(apiKey ? { apikey: apiKey } : {}),
         "Application-Name": "Ludex",
         "Application-Version": "1.0.0",
         "User-Agent": "Ludex",
       };
-      const linksResponse = await axios.get(
-        `https://api.nexusmods.com/v1/games/${domainName}/mods/${modId}/files/${fileId}/download_link.json`,
-        { headers, timeout: 30000 }
-      );
+      let linksResponse;
+      try {
+        linksResponse = await axios.get(
+          `https://api.nexusmods.com/v1/games/${domainName}/mods/${modId}/files/${fileId}/download_link.json`,
+          { headers, timeout: 30000 }
+        );
+      } catch (error) {
+        if (error.response?.status === 403) {
+          return {
+            success: false,
+            error:
+              "Nexus blocked the direct download. Use the nxm:// one-click flow or install the archive manually.",
+          };
+        }
+        throw error;
+      }
       const links = Array.isArray(linksResponse.data) ? linksResponse.data : [];
       const downloadUrl = links.find(link => link?.URI)?.URI;
       if (!downloadUrl) {

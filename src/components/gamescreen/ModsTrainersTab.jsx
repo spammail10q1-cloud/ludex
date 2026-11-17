@@ -177,6 +177,7 @@ function ModsSection({
   nxmLink,
   onNxmLinkChange,
   onInstallNxm,
+  onInstallArchive,
   nxmInstalling,
 }) {
   const { t } = useLanguage();
@@ -264,6 +265,15 @@ function ModsSection({
               <Download className="h-4 w-4" />
             )}
             {t("gameScreen.nxmInstall") || "Install nxm link"}
+          </Button>
+          <Button
+            variant="outline"
+            className="shrink-0 gap-2"
+            disabled={nxmInstalling}
+            onClick={onInstallArchive}
+          >
+            <FileSearch className="h-4 w-4" />
+            {t("gameScreen.installArchive") || "Install from file"}
           </Button>
         </div>
       </div>

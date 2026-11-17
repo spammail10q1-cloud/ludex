@@ -153,6 +153,40 @@ async function installNxm(nxmUrl, gameName) {
   }
 }
 
+async function installArchiveFromPath(gameName, archivePath) {
+  const gameDir = findGameDirectory(gameName);
+  if (!gameDir) throw new Error(`Game directory not found for ${gameName}`);
+  if (!archivePath || !fs.existsSync(archivePath)) {
+    throw new Error("Archive not found");
+  }
+  const extension = path.extname(archivePath).toLowerCase();
+  if (![".zip", ".7z", ".rar"].includes(extension)) {
+    throw new Error("Use a .zip, .7z or .rar mod archive");
+  }
+  await extractArchive(archivePath, gameDir);
+  return {
+    success: true,
+    installedTo: gameDir,
+    file: path.basename(archivePath),
+  };
+}
+
+async function pickAndInstallArchive(gameName) {
+  const { dialog, BrowserWindow } = require("electron");
+  const result = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() || undefined, {
+    title: `Install a mod archive for ${gameName}`,
+    properties: ["openFile"],
+    filters: [
+      { name: "Mod archives", extensions: ["zip", "7z", "rar"] },
+      { name: "All files", extensions: ["*"] },
+    ],
+  });
+  if (result.canceled || !result.filePaths?.length) {
+    return { success: false, canceled: true };
+  }
+  return installArchiveFromPath(gameName, result.filePaths[0]);
+}
+
 function linuxDesktopPath() {
   const dataHome = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
   return path.join(dataHome, "applications", "ludex-nxm.desktop");
@@ -334,6 +368,20 @@ function registerNxmHandlers() {
   ipcMain.handle("nexus-nxm-parse", async (_, nxmUrl) => {
     try {
       return { success: true, data: parseNxmUrl(nxmUrl) };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+  ipcMain.handle("nexus-install-archive", async (_, gameName, archivePath) => {
+    try {
+      return await installArchiveFromPath(gameName, archivePath);
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+  ipcMain.handle("nexus-pick-archive", async (_, gameName) => {
+    try {
+      return await pickAndInstallArchive(gameName);
     } catch (error) {
       return { success: false, error: error.message };
     }

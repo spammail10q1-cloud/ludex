@@ -2874,7 +2874,9 @@
     "nxmInstall": "Install nxm link",
     "nxmRegistered": "nxm:// handler enabled",
     "nxmUnregistered": "nxm:// handler disabled",
-    "nxmInstalled": "Installed {{file}}"
+    "nxmInstalled": "Installed {{file}}",
+    "installArchive": "Install from file",
+    "tryDirect": "Try direct (no key)"
   },
   "globalSearch": {
     "categories": {

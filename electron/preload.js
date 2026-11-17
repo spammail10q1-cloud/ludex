@@ -398,6 +398,9 @@ contextBridge.exposeInMainWorld("electron", {
   nexusNxmInstall: (nxmUrl, gameName) =>
     ipcRenderer.invoke("nexus-nxm-install", nxmUrl, gameName),
   nexusNxmParse: nxmUrl => ipcRenderer.invoke("nexus-nxm-parse", nxmUrl),
+  nexusInstallArchive: (gameName, archivePath) =>
+    ipcRenderer.invoke("nexus-install-archive", gameName, archivePath),
+  nexusPickArchive: gameName => ipcRenderer.invoke("nexus-pick-archive", gameName),
   onNxmInstallResult: callback =>
     preloadIpc.subscribe("nxm-install-result", callback, {
       selectArgs: args => [args[0]],

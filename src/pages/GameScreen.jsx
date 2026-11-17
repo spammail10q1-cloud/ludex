@@ -2523,14 +2523,10 @@ function InstalledGameScreen() {
 
   const handleDirectInstallMod = async (mod, fileId) => {
     if (!mod?.modId || !fileId) return;
-    if (!nexusApiKey.trim()) {
-      toast.error(t("gameScreen.nexusApiKeyRequired"));
-      return;
-    }
     setDirectInstalling(fileId);
     try {
       const result = await window.electron.nexusDirectInstall({
-        apiKey: nexusApiKey.trim(),
+        apiKey: nexusApiKey.trim() || null,
         domainName: nexusGameData?.domainName,
         modId: mod.modId,
         fileId,
@@ -2580,6 +2576,24 @@ function InstalledGameScreen() {
           `Installed ${result.file}`
       );
       setNxmLink("");
+      fetchMods(modsPage, modsSearchQuery, modsSortBy);
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setNxmInstalling(false);
+    }
+  };
+
+  const handleInstallArchive = async () => {
+    setNxmInstalling(true);
+    try {
+      const result = await window.electron.nexusPickArchive?.(game.game || game.name);
+      if (result?.canceled) return;
+      if (!result?.success) throw new Error(result?.error || "Install failed");
+      toast.success(
+        t("gameScreen.nxmInstalled", { file: result.file }) ||
+          `Installed ${result.file}`
+      );
       fetchMods(modsPage, modsSearchQuery, modsSortBy);
     } catch (error) {
       toast.error(error.message);
@@ -3381,6 +3395,7 @@ function InstalledGameScreen() {
                 nxmLink,
                 onNxmLinkChange: setNxmLink,
                 onInstallNxm: handleInstallNxm,
+                onInstallArchive: handleInstallArchive,
                 nxmInstalling,
               }}
             />
@@ -3488,7 +3503,7 @@ function InstalledGameScreen() {
                             <Download className="h-4 w-4" />
                             {t("gameScreen.downloadFile")}
                           </Button>
-                          {nexusApiKey && (
+                          {( 
                             <Button
                               size="sm"
                               className="gap-1 text-secondary"
@@ -3502,7 +3517,7 @@ function InstalledGameScreen() {
                               ) : (
                                 <Download className="h-4 w-4" />
                               )}
-                              {t("gameScreen.installMod")}
+                              {nexusApiKey ? t("gameScreen.installMod") : (t("gameScreen.tryDirect") || "Try direct (no key)")}
                             </Button>
                           )}
                         </div>
@@ -3577,7 +3592,7 @@ function InstalledGameScreen() {
                                     <Download className="h-4 w-4" />
                                     {t("gameScreen.downloadFile")}
                                   </Button>
-                                  {nexusApiKey && (
+                                  {( 
                                     <Button
                                       size="sm"
                                       className="gap-1 text-secondary"
@@ -3591,7 +3606,7 @@ function InstalledGameScreen() {
                                       ) : (
                                         <Download className="h-4 w-4" />
                                       )}
-                                      {t("gameScreen.installMod")}
+                                      {nexusApiKey ? t("gameScreen.installMod") : (t("gameScreen.tryDirect") || "Try direct (no key)")}
                                     </Button>
                                   )}
                                 </div>
